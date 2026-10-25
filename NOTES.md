@@ -86,3 +86,32 @@
   disassembly windows for addresses in E:\WET\work\addrs.txt.
 - Sections: .text 0x82510000-0x8338A54F, BINK 0x8338A600 (Bink video), .data 0x833A4600,
   .pdata 0x824A7200. Symbols: symbols/wet.sym.
+
+## Crash reporter (2026-10-25)
+- src/crash/crash_handler.{h,cpp}, installed from WetApp::Create (before runtime setup).
+  Hooks: SetUnhandledExceptionFilter (last in chain; SDK VEH + guest SEH run first), SIGABRT
+  (REX_FATAL calls std::abort), std::terminate, purecall, CRT invalid parameter.
+  _set_abort_behavior disables the CRT abort dialog/WER.
+- Writes <exe dir>/crashes/crash-<time>-<pid>.txt + .dmp; keeps newest 20 files.
+  Report: exception + AV address (with guest address if inside guest arena), host regs,
+  DbgHelp-symbolized host stack with file:line, guest PPCContext (r0-31, lr, ctr, msr, xer,
+  cr0-7, fpscr, f0-31, last_indirect_target), guest back-chain walk ([sp] = caller sp,
+  saved LR at caller_sp-8). Dump: MiniDumpNormal|ThreadInfo|UnloadedModules|
+  IndirectlyReferencedMemory, written from a helper thread, report as CommentStreamA.
+- WET_CRASH_NO_DIALOG=1 suppresses the message box.
+- Verified with crash_selftest.exe (never loads the game): av, abort, terminate, purecall,
+  overflow, cxx all produce report + dump; dumps 115 KB (1.1 MB for stack overflow);
+  dump stream directory verified (Exception, ThreadList, ModuleList, CommentStreamA, ...).
+- NOT yet verified: the guest-register / guest-stack part (needs a crash on a guest thread).
+
+## First game build (2026-10-25)
+- SDK installs the rexglue CLI only for Release (cmake/rexglue_install.cmake), so the
+  game's find_package failed with "IMPORTED_LOCATION not set for rex::rexglue". build.py sdk
+  now installs RelWithDebInfo + Release. No SDK patch needed.
+- init template omits GPU_PLUGINS: changed to rexglue_setup_target(wet GPU_PLUGINS xenos)
+  so rexgpu-xenosrd.dll is staged next to wet.exe.
+- `build.py game --target wet --jobs 20`: 243 steps, 151 s, 0 warnings, 0 errors.
+  wet.exe 84 MB, wet.pdb 93 MB. Imports rexruntimerd.dll + system DLLs only.
+- Runtime paths: --game_data_root required (scripts/run.py passes ../game); user data/saves
+  default to Documents\wet; optional config wet.toml next to the exe; cache in user dir.
+- NOT launched yet.

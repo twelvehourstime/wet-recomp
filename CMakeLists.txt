@@ -22,7 +22,7 @@ else()
     add_executable(wet ${WET_SOURCES})
 endif()
 
-rexglue_setup_target(wet)
+rexglue_setup_target(wet GPU_PLUGINS xenos)
 
 if(WIN32)
     target_link_libraries(wet PRIVATE dbghelp)
