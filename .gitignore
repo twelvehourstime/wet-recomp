@@ -18,7 +18,8 @@
 /data/
 
 # --- Generated recompiled code ---
-/generated/
+/generated/*
+!/generated/rexglue.cmake
 /out/
 **/ppc_recomp*.cpp
 **/ppc_func_mapping*.cpp

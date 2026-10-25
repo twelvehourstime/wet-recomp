@@ -52,3 +52,15 @@
 - Patch 1: libmspack symlinks (see patches/README.md). Other symlinks: moltenvk (mac only),
   o1heap/CLAUDE.md (docs) - harmless.
 - Gotcha: `cmd; tail log` reports tail's exit code; build logs now end with the real "exit N".
+
+## Game extraction + rexglue init (2026-10-25)
+- tools/xdvdfs_extract.py (own, read-only): WET.iso is an XGD2 dump, game partition at
+  0xFD90000. Extracted to E:\WET\game: 13,355 files, 4,588,315,622 bytes (matches file table).
+- default.xex: XEX2, title ID 425307DB, media ID 666E3BB8, version 3, disc 1/1,
+  encrypted + basic-compressed. Image base 0x82000000, stack 0x80000. No DLLs/XEXP on disc.
+- `rexglue init --project-name wet --xex-path E:/WET/game/default.xex --game-root E:/WET/game
+  --project-root .` wrote CMakeLists.txt, CMakePresets.json, wet_manifest.toml,
+  src/main.cpp, src/wet_app.h, generated/rexglue.cmake. Paths were made relative (../game).
+- generated/rexglue.cmake is SDK boilerplate (committed); generated/default/ (codegen output)
+  stays ignored.
+- Game's own CMakePresets are single-config Ninja (win-amd64-relwithdebinfo is our daily driver).
