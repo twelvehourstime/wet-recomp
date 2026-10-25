@@ -1,0 +1,8 @@
+# Mid-asm hooks: guest address -> host function in src/patches/.
+
+# D3D present (sub_83066D80): r11 = vblanks per swap derived from device+13596
+# (PresentationInterval; Wet uses 2 = 30 fps). Hook runs before `lwz r10,11860(r31)`.
+[[midasm_hook]]
+name = "WetPresentIntervalHook"
+address = 0x83066E70
+registers = ["r11"]

@@ -4,9 +4,13 @@
 
 #pragma once
 
+#include <rex/cvar.h>
+#include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 
 #include "crash/crash_handler.h"
+
+REXCVAR_DECLARE(std::string, perf_log_csv);
 
 class WetApp : public rex::ReXApp {
  public:
@@ -25,8 +29,12 @@ class WetApp : public rex::ReXApp {
     if (config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
   }
 
+  // SDK v0.10.0 defines --perf_log_csv but never applies it; open the per-frame CSV here.
+  void OnPostInitLogging() override {
+    if (!REXCVAR_GET(perf_log_csv).empty()) rex::perf::SetCsvLogPath(REXCVAR_GET(perf_log_csv));
+  }
+
   // Override virtual hooks for customization:
-  // void OnPostInitLogging() override {}
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
   // void OnPostSetup() override {}

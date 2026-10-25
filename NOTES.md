@@ -185,3 +185,42 @@ Observations:
   (log_flush_interval default) before relying on logs for diagnostics.
 - Blind scripted play is slow (tutorial popups pause the game); deeper coverage needs
   milestone 3 input record/replay or human play.
+
+## 60 fps (2026-10-25)
+Measurement tooling:
+- SDK bug: --perf_log_csv is defined but SetCsvLogPath() is never called. WetApp::
+  OnPostInitLogging applies it (app-side, no SDK patch). CSV is opened exclusively; read it
+  after the game exits. One row per guest swap (XE_SWAP), frame_time_us = host time between swaps.
+- tools/analysis/frametimes.py <csv> [--last N] -> mean/median/p95/p99 + vblanks/frame histogram.
+Baseline: locked 30 fps (5,852 frames, 99.9% exactly 2 vblanks; gameplay p99 35.9 ms).
+Cap location (D3D, statically linked in the game):
+- vblank interrupt cb 0x8305E5B8 -> sub_83066A10: vblank counter device+16548, swap ring
+  read/write idx +16700/+16704, entries {frontbuffer,+16572; target vblank,+16576}.
+- sub_83066B28 (swap callback): packed arg bits 8-11 = vblanks/swap; target = max(last+N, now).
+- sub_83066D80 (present): device+13596 = PresentationInterval (0/1->1, 2->2, 4->3) -> r11.
+Fix: config/hooks.toml midasm hook WetPresentIntervalHook @0x83066E70 (r11 2 -> 1),
+  src/patches/framerate.cpp, cvar wet_unlock_60fps (default true).
+Results (gameplay, last 600 frames): 30 fps -> 60.0 fps, 100% 1-vblank frames,
+  median 16.63 ms, p99 19.5 ms. Overall 11,025 frames 59.9 fps.
+Game-speed check (A/B, same save, same inputs, wet_unlock_60fps true vs false):
+- Restaurant cutscene: identical shot + subtitle at +10/+20/+30/+40 s in both modes.
+- Gameplay: holding W 2.0 s from level start ends at the same spot (between the ice
+  dragons, next to the same enemy) in both modes -> movement uses real delta time.
+- Not checked: physics edge cases, animation/blend timing, scripted timers, Bink video speed.
+Frame pacing at 60: mean 16.66 but 13-20 ms spread, 29.6% > 17.5 ms, 179 long->short pairs
+  -> SDK vblank thread Sleep(1) jitter; testing patch 2 (high-res timer).
+Patch 2 A/B (title/intro idle, no input, frames 1800-4200, 80 s runs, cvar vblank_precise_timer):
+| run | precise | stdev | p1 | p99 | >17.5ms |
+| 1 | false | 1.227 | 13.66 | 19.99 | 28.0% |
+| 1 | true  | 0.923 | 15.00 | 18.52 | 22.9% |
+| 2 | false | 1.416 | 13.51 | 20.01 | 30.5% |
+| 2 | true  | 1.039 | 14.64 | 18.66 | 26.7% |
+-> kept (stdev -25%, p99 20.0 -> 18.6 ms). Mean 16.666 ms either way.
+Remaining ~25% of frames >0.8 ms off: not the vblank thread; suspect CP swap-packet timing
+(frame_time_us is measured when the CP executes XE_SWAP). Investigate in milestone 4 with
+host-present timestamps.
+Gotchas this session:
+- computer-use open_application("Wet") launches a NEW wet.exe without args (error
+  "--game_data_root was not provided"); never use it to focus. Use WScript.Shell AppActivate.
+- TextInputHost (Windows IME host) can grab the foreground and block synthetic input.
+- taskkill is async: wait for the process to disappear before run.py (its guard refuses).

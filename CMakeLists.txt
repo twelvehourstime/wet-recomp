@@ -14,6 +14,7 @@ include(generated/rexglue.cmake)
 set(WET_SOURCES
     src/main.cpp
     src/crash/crash_handler.cpp
+    src/patches/framerate.cpp
 )
 
 if(WIN32)

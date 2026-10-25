@@ -1,3 +1,74 @@
+diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
+index 8f2fcb0..66fb7a6 100644
+--- a/src/graphics/graphics_system.cpp
++++ b/src/graphics/graphics_system.cpp
+@@ -11,6 +11,11 @@
+ 
+ #include <rex/graphics/graphics_system.h>
+ 
++#include <rex/platform.h>
++#if REX_PLATFORM_WIN32
++#include "../core/platform_win.h"
++#endif
++
+ #include <algorithm>
+ #include <cctype>
+ #include <cstdint>
+@@ -31,6 +36,8 @@
+ #include <rex/ui/window.h>
+ #include <rex/ui/windowed_app_context.h>
+ 
++REXCVAR_DEFINE_BOOL(vblank_precise_timer, true, "GPU",
++                    "Pace guest vblanks with a high-resolution timer (wet-recomp patch)");
+ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none, fxaa, fxaa_extreme")
+     .allowed({"none", "fxaa", "fxaa_extreme"})
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+@@ -158,6 +165,13 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+             std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
+         uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
+         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
++#if REX_PLATFORM_WIN32
++        // wet-recomp patch: Sleep(1) polling fired vblanks up to ~3 ms late (16.7 ms
++        // average but 13-20 ms spread). Sleep on a high-resolution waitable timer until
++        // just before the deadline, then spin the remainder.
++        HANDLE vblank_timer = CreateWaitableTimerExW(
++            nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
++#endif
+         while (vsync_worker_running_) {
+           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
+           uint64_t interval_ticks =
+@@ -166,8 +180,31 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+             MarkVblank();
+             last_frame_time += interval_ticks;
+           }
++#if REX_PLATFORM_WIN32
++          if (vblank_timer && REXCVAR_GET(vblank_precise_timer)) {
++            uint64_t deadline = last_frame_time + interval_ticks;
++            uint64_t now = chrono::Clock::QueryGuestTickCount();
++            if (deadline > now) {
++              // Wake ~0.5 ms early (in 100 ns units), then spin to the deadline.
++              int64_t remaining_100ns =
++                  int64_t((deadline - now) * 10000000ull / guest_tick_frequency) - 5000;
++              if (remaining_100ns > 0) {
++                LARGE_INTEGER due;
++                due.QuadPart = -remaining_100ns;
++                if (SetWaitableTimer(vblank_timer, &due, 0, nullptr, nullptr, FALSE))
++                  WaitForSingleObject(vblank_timer, INFINITE);
++              }
++              while (chrono::Clock::QueryGuestTickCount() < deadline && vsync_worker_running_)
++                YieldProcessor();
++            }
++            continue;
++          }
++#endif
+           rex::thread::Sleep(std::chrono::milliseconds(1));
+         }
++#if REX_PLATFORM_WIN32
++        if (vblank_timer) CloseHandle(vblank_timer);
++#endif
+         return 0;
+       }));
+   // TODO: set_can_debugger_suspend not yet ported
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
 index f102b56..ba610bb 100644
 --- a/thirdparty/CMakeLists.txt
