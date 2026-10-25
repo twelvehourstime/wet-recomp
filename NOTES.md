@@ -224,3 +224,31 @@ Gotchas this session:
   "--game_data_root was not provided"); never use it to focus. Use WScript.Shell AppActivate.
 - TextInputHost (Windows IME host) can grab the foreground and block synthetic input.
 - taskkill is async: wait for the process to disappear before run.py (its guard refuses).
+
+## Mouse look (2026-10-25)
+- Why the mouse "didn't work": SDK v0.10.0 has mnk_mode and mnk_mouse both default false.
+  src/input_defaults.cpp sets mnk_mode=true, mnk_mouse=true, mnk_mouse_to_stick=false unless
+  the user set them (cvar Source::kDefault check; runs in OnPostInitLogging, after config + CLI).
+- SDK mouse->stick (delta*200*sens per poll) felt slow + joystick-like: per-poll deltas of 2-4
+  counts -> stick ~600/32767 (inside the game's dead zone), then integrated as angular velocity.
+- Synthetic SendInput relative moves are NOT delivered once SDL relative mode is on (real mouse
+  is). Can't automate mouse tests that way.
+Input chain (found with temporary hooks logging guest lr + the memtool watchpoint):
+- XInput poll: vtable 0x82316B14 -> sub_82BF2AA0 (Controller::Update): X_INPUT_STATE on stack,
+  floats at dev+8/+12 (LX/LY), +16/+20 (RX/RY).
+- InputDevice::GetValue(ch) sub_82BF1CC0 (vtable slot 1): float at dev+(ch+2)*4; ch>=1000 remap.
+- InputAction::GetValue sub_82B0ADD0 (binding list at this+16).
+- GetLeftStick sub_829A2F10 / GetRightStick sub_829A2FE8 (this, vec2* out).
+- Player control snapshot sub_829B8078: right stick -> player+164/+168, left -> +172/+176,
+  sub_829A64B8 = camera-relative/deadzone transform (invert flag bytes).
+- Camera update sub_829B1960: per axis sub_829AB470(angle, max, min, speed, stick, out):
+  angle += dt(timer vfn) * speed * stick, then sub_829A8168 clamp/wrap. Yaw result r1+84,
+  pitch r1+80, pitch clamp sub_829AEFC0 afterwards. Only caller of sub_829AB470.
+Fix: hook WetMouseLookHook @0x829B1AA8 (r1,f30=yaw speed,f27=pitch speed) adds raw counts *
+  wet_mouse_sensitivity (deg/count, default 0.05) to yaw/pitch, direction = sign of game speed
+  (same as stick), wet_mouse_invert_y, deltas older than 0.25 s dropped (menus/cutscenes).
+  wet_raw_mouse=false restores SDK stick emulation. Controller/arrow-key camera unaffected (verified).
+Tools added: src/debug/memtool.cpp (--wet_memtool): dump.req (all committed guest memory),
+  poke.req, watch.req (PAGE_GUARD data watchpoint, logs host fn = sub_<guest addr>);
+  tools/analysis/memdiff.py, show_func.py. Note dumps are 1.6 GB each (E:\WET\work\memtool).
+- NOT yet verified: actual mouse feel / sensitivity / pitch direction with a real mouse.

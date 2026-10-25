@@ -15,6 +15,9 @@ set(WET_SOURCES
     src/main.cpp
     src/crash/crash_handler.cpp
     src/patches/framerate.cpp
+    src/patches/mouselook.cpp
+    src/input_defaults.cpp
+    src/debug/memtool.cpp
 )
 
 if(WIN32)
@@ -26,7 +29,7 @@ endif()
 rexglue_setup_target(wet GPU_PLUGINS xenos)
 
 if(WIN32)
-    target_link_libraries(wet PRIVATE dbghelp)
+    target_link_libraries(wet PRIVATE dbghelp)  # crash reporter + memtool watch
 endif()
 
 # Crash reporter self-test: links only the crash handler + SDK runtime, never loads the game.

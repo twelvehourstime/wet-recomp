@@ -6,3 +6,12 @@
 name = "WetPresentIntervalHook"
 address = 0x83066E70
 registers = ["r11"]
+
+# Camera update (sub_829B1960): after both axes went through the integrator sub_829AB470
+# (angle += dt * speed * stick), new yaw is at r1+84 and new pitch at r1+80 (pitch is clamped
+# afterwards by sub_829AEFC0). f30 = yaw speed, f27 = pitch speed (their signs give the
+# stick->angle direction). Raw mouse counts are added here, 1:1, with no curve or ramp.
+[[midasm_hook]]
+name = "WetMouseLookHook"
+address = 0x829B1AA8
+registers = ["r1", "f30", "f27"]

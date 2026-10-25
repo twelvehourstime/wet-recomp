@@ -9,6 +9,8 @@
 #include <rex/rex_app.h>
 
 #include "crash/crash_handler.h"
+#include "debug/memtool.h"
+#include "input_defaults.h"
 
 REXCVAR_DECLARE(std::string, perf_log_csv);
 
@@ -32,12 +34,14 @@ class WetApp : public rex::ReXApp {
   // SDK v0.10.0 defines --perf_log_csv but never applies it; open the per-frame CSV here.
   void OnPostInitLogging() override {
     if (!REXCVAR_GET(perf_log_csv).empty()) rex::perf::SetCsvLogPath(REXCVAR_GET(perf_log_csv));
+    wet::ApplyInputDefaults();
   }
+
+  void OnPostSetup() override { wet::memtool::StartIfEnabled(); }
 
   // Override virtual hooks for customization:
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
-  // void OnPostSetup() override {}
   // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>

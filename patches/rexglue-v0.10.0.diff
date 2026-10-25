@@ -1,3 +1,19 @@
+diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
+index c8751b7..bd61544 100644
+--- a/include/rex/input/mnk/mnk_input_driver.h
++++ b/include/rex/input/mnk/mnk_input_driver.h
+@@ -25,6 +25,11 @@ namespace rex::input::mnk {
+ void SetMouseLookActive(bool active);
+ bool IsMouseLookActive();
+ 
++// wet-recomp patch: raw relative mouse counts accumulated while mouse look is captured, for
++// games that apply them to the camera directly. Returns the counts since the last call and
++// the seconds elapsed since that call. Not affected by mnk_sensitivity.
++void TakeRawMouseDelta(float& dx, float& dy, double& seconds_since_last_take);
++
+ class MnkInputDriver final : public InputDriver,
+                              public rex::ui::WindowInputListener,
+                              public rex::ui::WindowListener {
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
 index 8f2fcb0..66fb7a6 100644
 --- a/src/graphics/graphics_system.cpp
@@ -69,6 +85,90 @@ index 8f2fcb0..66fb7a6 100644
          return 0;
        }));
    // TODO: set_can_debugger_suspend not yet ported
+diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
+index 3f9422d..0e9251e 100644
+--- a/src/input/mnk/mnk_input_driver.cpp
++++ b/src/input/mnk/mnk_input_driver.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/ui/window.h>
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <cmath>
+ #include <cstdlib>
+ #include <cstring>
+@@ -27,6 +28,9 @@ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller
+ REXCVAR_DEFINE_BOOL(mnk_mouse, false, "Input",
+                     "Use the mouse for the right stick. Off means the right stick comes "
+                     "from the keybind_rstick_* keys only");
++REXCVAR_DEFINE_BOOL(mnk_mouse_to_stick, true, "Input",
++                    "Feed mouse look into the right stick (off: the game reads raw deltas via "
++                    "TakeRawMouseDelta; wet-recomp patch)");
+ REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
+     .range(0.01, 10.0);
+ 
+@@ -137,8 +141,26 @@ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t l
+ 
+ std::atomic<bool> mouse_look_active{true};
+ 
++std::mutex raw_mouse_mutex;
++float raw_mouse_dx = 0.0f;
++float raw_mouse_dy = 0.0f;
++std::chrono::steady_clock::time_point raw_mouse_last_take{};
++
+ }  // namespace
+ 
++void TakeRawMouseDelta(float& dx, float& dy, double& seconds_since_last_take) {
++  std::lock_guard lock(raw_mouse_mutex);
++  auto now = std::chrono::steady_clock::now();
++  seconds_since_last_take = raw_mouse_last_take.time_since_epoch().count() == 0
++                                ? 1e9
++                                : std::chrono::duration<double>(now - raw_mouse_last_take).count();
++  raw_mouse_last_take = now;
++  dx = raw_mouse_dx;
++  dy = raw_mouse_dy;
++  raw_mouse_dx = 0.0f;
++  raw_mouse_dy = 0.0f;
++}
++
+ void SetMouseLookActive(bool active) {
+   mouse_look_active.store(active, std::memory_order_relaxed);
+ }
+@@ -331,7 +353,7 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
+     ry -= INT16_MAX;
+ 
+-  if (REXCVAR_GET(mnk_mouse) && IsMouseLookActive()) {
++  if (REXCVAR_GET(mnk_mouse) && REXCVAR_GET(mnk_mouse_to_stick) && IsMouseLookActive()) {
+     double sensitivity = REXCVAR_GET(mnk_sensitivity);
+     constexpr double kBaseScale = 200.0;
+     rx += static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale);
+@@ -541,13 +563,21 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+   int32_t y = e.y();
+   {
+     std::lock_guard lock(state_mutex_);
++    float dx, dy;
+     if (relative_mouse_mode_) {
+       // The pointer is locked, so the absolute position no longer moves.
+-      mouse_dx_ += e.dx();
+-      mouse_dy_ += e.dy();
++      dx = e.dx();
++      dy = e.dy();
+     } else {
+-      mouse_dx_ += float(x - prev_mouse_x_);
+-      mouse_dy_ += float(y - prev_mouse_y_);
++      dx = float(x - prev_mouse_x_);
++      dy = float(y - prev_mouse_y_);
++    }
++    mouse_dx_ += dx;
++    mouse_dy_ += dy;
++    if (mouse_captured_) {
++      std::lock_guard raw_lock(raw_mouse_mutex);
++      raw_mouse_dx += dx;
++      raw_mouse_dy += dy;
+     }
+   }
+   prev_mouse_x_ = x;
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
 index f102b56..ba610bb 100644
 --- a/thirdparty/CMakeLists.txt
