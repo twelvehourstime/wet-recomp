@@ -104,13 +104,19 @@ index 536009e..eb0c3da 100644
      REXLOG_WARN("perf: failed to open CSV log: {}", path);
      g_csv_path.clear();
 diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
-index 8e6b854..cfeb60c 100644
+index 8e6b854..a1fc14e 100644
 --- a/src/graphics/d3d12/pipeline_cache.cpp
 +++ b/src/graphics/d3d12/pipeline_cache.cpp
-@@ -763,6 +763,15 @@ void PipelineCache::EndSubmission() {
+@@ -762,7 +762,20 @@ void PipelineCache::EndSubmission() {
+     shader_storage_file_flush_needed_ = false;
      pipeline_storage_file_flush_needed_ = false;
    }
-   if (!creation_threads_.empty()) {
+-  if (!creation_threads_.empty()) {
++  // wet-recomp patch: with async_shader_compilation the command processor already skips
++  // draws whose pipeline is not created yet, so nothing in the submission needs the queued
++  // pipelines. Waiting here (and creating them on this thread) only stalled the frame for
++  // 100-400 ms per burst of new shaders; the creation threads finish them on their own.
++  if (!creation_threads_.empty() && !REXCVAR_GET(async_shader_compilation)) {
 +    // wet-recomp patch: measure how long this submission blocks on pipeline creation.
 +    const uint64_t wait_start_tick = rex::chrono::Clock::QueryHostTickCount();
 +    struct WaitTimer {
@@ -123,7 +129,7 @@ index 8e6b854..cfeb60c 100644
      CreateQueuedPipelinesOnProcessorThread();
      // Await creation of all queued pipelines.
      bool await_creation_completion_event;
-@@ -1059,6 +1068,14 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
+@@ -1059,6 +1072,14 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                                              D3D12Shader::D3D12Translation& translation,
                                              IDxbcConverter* dxbc_converter, IDxcUtils* dxc_utils,
                                              IDxcCompiler* dxc_compiler) {
