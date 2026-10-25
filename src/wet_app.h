@@ -6,12 +6,16 @@
 
 #include <rex/rex_app.h>
 
+#include "crash/crash_handler.h"
+
 class WetApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
+    // Before the runtime exists, so crashes during setup are reported too.
+    wet::crash::Install();
     return std::unique_ptr<WetApp>(new WetApp(ctx, "wet",
         PPCImageConfig));
   }

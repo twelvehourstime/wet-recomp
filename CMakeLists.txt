@@ -13,6 +13,7 @@ include(generated/rexglue.cmake)
 # Sources
 set(WET_SOURCES
     src/main.cpp
+    src/crash/crash_handler.cpp
 )
 
 if(WIN32)
@@ -22,3 +23,16 @@ else()
 endif()
 
 rexglue_setup_target(wet)
+
+if(WIN32)
+    target_link_libraries(wet PRIVATE dbghelp)
+endif()
+
+# Crash reporter self-test: links only the crash handler + SDK runtime, never loads the game.
+add_executable(crash_selftest src/crash/crash_selftest.cpp src/crash/crash_handler.cpp)
+target_include_directories(crash_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(crash_selftest PRIVATE rex::runtime dbghelp)
+rexglue_apply_target_settings(crash_selftest)
+add_custom_command(TARGET crash_selftest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:crash_selftest> $<TARGET_FILE_DIR:crash_selftest>
+    COMMAND_EXPAND_LISTS)

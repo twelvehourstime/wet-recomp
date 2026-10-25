@@ -1,7 +1,8 @@
 """Build driver for wet-recomp.
 
 Usage:
-    python scripts/build.py sdk [--config RelWithDebInfo] [--clean]
+    python scripts/build.py sdk  [--config RelWithDebInfo] [--clean]
+    python scripts/build.py game [--config RelWithDebInfo] [--target T] [--jobs N] [--clean]
 
 Refuses to run while the game (or Xenia) is running, so a build never
 replaces binaries or generated code under a live process.
@@ -70,13 +71,42 @@ def build_sdk(args):
     run(["cmake", "--preset", SDK_PRESET,
          f"-DCMAKE_C_COMPILER={LLVM_BIN / 'clang.exe'}",
          f"-DCMAKE_CXX_COMPILER={LLVM_BIN / 'clang++.exe'}"], cwd=SDK_DIR)
-    run(["cmake", "--build", str(build_dir), "--config", args.config,
-         "--target", "install", "--parallel"], cwd=SDK_DIR)
+    # The SDK only installs the rexglue codegen CLI from its Release config
+    # (cmake/rexglue_install.cmake), so Release is always installed as well.
+    for config in dict.fromkeys([args.config, "Release"]):
+        run(["cmake", "--build", str(build_dir), "--config", config,
+             "--target", "install", "--parallel"], cwd=SDK_DIR)
+
+
+def build_game(args):
+    preset = f"win-amd64-{args.config.lower()}"
+    build_dir = ROOT / "out" / "build" / preset
+    if args.clean and build_dir.exists():
+        shutil.rmtree(build_dir)
+    sdk_install = SDK_DIR / "out" / "install" / SDK_PRESET
+    if not sdk_install.exists():
+        sys.exit("build.py: SDK not installed; run `python scripts/build.py sdk` first")
+    run(["cmake", "--preset", preset,
+         f"-DCMAKE_C_COMPILER={LLVM_BIN / 'clang.exe'}",
+         f"-DCMAKE_CXX_COMPILER={LLVM_BIN / 'clang++.exe'}",
+         f"-DCMAKE_PREFIX_PATH={sdk_install}"], cwd=ROOT)
+    cmd = ["cmake", "--build", str(build_dir), "--parallel"]
+    if args.jobs:
+        cmd.append(str(args.jobs))
+    for t in args.target or []:
+        cmd += ["--target", t]
+    run(cmd, cwd=ROOT)
 
 
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
+    g = sub.add_parser("game", help="configure and build the recompiled game")
+    g.add_argument("--config", default="RelWithDebInfo")
+    g.add_argument("--target", action="append", help="build only this target (repeatable)")
+    g.add_argument("--jobs", type=int, default=0)
+    g.add_argument("--clean", action="store_true")
+    g.set_defaults(func=build_game)
     s = sub.add_parser("sdk", help="configure, build and install the ReXGlue SDK")
     s.add_argument("--config", default="RelWithDebInfo")
     s.add_argument("--clean", action="store_true")
