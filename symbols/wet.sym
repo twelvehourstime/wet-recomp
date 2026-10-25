@@ -1,0 +1,12 @@
+# Wet (425307DB) symbol file: <address> <name> ; <one-line meaning>
+# Addresses are guest virtual addresses. Grows as functions are identified.
+0x8303B668 xex_entry                     ; XEX entry point
+0x8301A948 sub_8301A948                  ; leaf, stores 1/2 into this+0x23C depending on r4 (tail-call only)
+0x82BA1948 get_f_70_74_a                 ; float getter: return this->(+0x70)->(+0x74)
+0x82BA13F8 get_f_70_74_b                 ; float getter: return this->(+0x70)->(+0x74) (duplicate)
+0x82F88858 sub_82F88858                  ; virtual dispatch helper, stores r3 to global 0x8351CBE4
+0x82F9EB00 sub_82F9EB00                  ; walks list via global 0x8351CBE4
+0x82FED688 thunk_this_plus8_82FEC040     ; this-adjust thunk (r3 += 8)
+0x82F898D0 ctor_set_vtable_823A2014      ; writes vtable 0x823A2014 then tail-calls 0x82F89760
+0x82D43F78 thunk_82D436A8                ; unconditional thunk
+0x831BAC4C __savegprlr_29                ; (likely) GPR save helper used by prologues

@@ -1,0 +1,13 @@
+# Functions the analyzer misses because they are only reached by tail calls (`b`, no `bl`).
+# Each starts right after another function's blr / padding / tail branch.
+# Sized with tools/analysis/tailcall_sizes.py and checked for branches leaving the range.
+
+[functions]
+0x8301A948 = { size = 0x28 }  # leaf, ends blr; tail-called from 0x8300971C
+0x82BA1948 = { size = 0xC }   # getter: f1 = this->+0x70->+0x74; from 0x82B2248C
+0x82BA13F8 = { size = 0xC }   # getter: f1 = this->+0x70->+0x74; from 0x82B222AC
+0x82F88858 = { size = 0x40 }  # ends bctr; reached from thunk table at 0x82A4BB70
+0x82F9EB00 = { size = 0x50 }  # tail-called from 0x82F9F560; next fn 0x82F9EB50 (codegen split)
+0x82FED688 = { size = 0x8 }   # this-adjust thunk (r3 += 8) -> 0x82FEC040
+0x82F898D0 = { size = 0x10 }  # sets vtable then tail-calls 0x82F89760; from 0x83382E78
+0x82D43F78 = { size = 0x4 }   # thunk -> 0x82D436A8; from 0x833796B0

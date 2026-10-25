@@ -64,3 +64,25 @@
 - generated/rexglue.cmake is SDK boilerplate (committed); generated/default/ (codegen output)
   stays ignored.
 - Game's own CMakePresets are single-config Ninja (win-amd64-relwithdebinfo is our daily driver).
+
+## Codegen (2026-10-25)
+- First run: validation failed with 10 UnresolvedCall (8 unique targets): small functions only
+  reached by tail calls (`b`), never `bl`, so the analyzer had no entry for them.
+  Fixed with config/functions.toml (included from wet_manifest.toml), sizes from
+  tools/analysis/tailcall_sizes.py + branch-range check. 0x82F9EB00 is 0x50 (codegen split it).
+- Result: exit 0, ~74 s, 475 files, 73,120 functions, 248 MB in generated/default/
+  (234 wet_recomp.N.cpp). No unimplemented-instruction markers.
+- Imports: 231. All present in SDK by name. Stubs (REX_EXPORT_STUB): IoCheckShareAccess,
+  IoCompleteRequest, IoDeleteDevice, IoDismountVolume, IoRemoveShareAccess, IoSetShareAccess,
+  ObIsTitleObject, ObReferenceObject, RtlUpcaseUnicodeChar, XamShowAchievementsUI/FriendsUI/
+  MarketplaceUI, XamUserCreateStatsEnumerator, XeCryptBnQwBeSigVerify, XeCryptRotSumSha,
+  XeKeysGetKey. No REX_EXPORT line found (probably varargs handled elsewhere; verify at link):
+  DbgPrint, _snprintf, _snwprintf, _vscwprintf, _vsnprintf, sprintf, swprintf, vswprintf.
+  Watch: XeCrypt*/XeKeysGetKey stubs may break save-signature checks; RtlUpcaseUnicodeChar
+  stub may break case-insensitive string compares. NtQueueApcThread (old Xenia blocker) is
+  implemented.
+- Ghidra: XEXLoaderWV 12.1.3 verified working headless (retail decrypt OK). Project and
+  memory dumps in E:\WET\work (outside repo). tools/ghidra/DumpAround.java dumps blocks +
+  disassembly windows for addresses in E:\WET\work\addrs.txt.
+- Sections: .text 0x82510000-0x8338A54F, BINK 0x8338A600 (Bink video), .data 0x833A4600,
+  .pdata 0x824A7200. Symbols: symbols/wet.sym.
