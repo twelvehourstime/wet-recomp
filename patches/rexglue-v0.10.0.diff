@@ -43,6 +43,101 @@ index c8751b7..4708456 100644
  class MnkInputDriver final : public InputDriver,
                               public rex::ui::WindowInputListener,
                               public rex::ui::WindowListener {
+diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
+index b3947e0..e318030 100644
+--- a/include/rex/perf/counter.h
++++ b/include/rex/perf/counter.h
+@@ -49,6 +49,10 @@ enum class CounterId : uint16_t {
+   kPipelineCacheHits,
+   kPipelineCacheMisses,
+ 
++  // wet-recomp patch: GPU-thread time blocked on pipeline creation / shader translation
++  kPipelineWaitUs,
++  kShaderTranslateUs,
++
+   kCount  // sentinel -- must be last
+ };
+ 
+diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
+index 536009e..eb0c3da 100644
+--- a/src/core/perf/counter.cpp
++++ b/src/core/perf/counter.cpp
+@@ -17,6 +17,9 @@
+ #include <array>
+ #include <atomic>
+ #include <cstdio>
++#if defined(_WIN32)
++#include <share.h>
++#endif
+ #include <cstring>
+ 
+ REXCVAR_DEFINE_STRING(perf_log_csv, "", "Perf",
+@@ -49,6 +52,8 @@ constexpr const char* kCounterNames[] = {
+     "texture_cache_misses",
+     "pipeline_cache_hits",
+     "pipeline_cache_misses",
++    "pipeline_wait_us",
++    "shader_translate_us",
+ };
+ static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
+ 
+@@ -72,6 +77,8 @@ constexpr bool kIsGauge[] = {
+     false,  // kTextureCacheMisses
+     false,  // kPipelineCacheHits
+     false,  // kPipelineCacheMisses
++    false,  // kPipelineWaitUs
++    false,  // kShaderTranslateUs
+ };
+ static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
+ 
+@@ -137,7 +144,12 @@ void SetCsvLogPath(const std::string& path) {
+   if (path.empty())
+     return;
+ 
++#if defined(_WIN32)
++  // wet-recomp patch: share-readable so the log can be analyzed while the game runs.
++  g_csv_file = _wfsopen(rex::to_path(path).c_str(), L"w", _SH_DENYNO);
++#else
+   g_csv_file = rex::filesystem::OpenFile(rex::to_path(path), "w");
++#endif
+   if (!g_csv_file) {
+     REXLOG_WARN("perf: failed to open CSV log: {}", path);
+     g_csv_path.clear();
+diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
+index 8e6b854..cfeb60c 100644
+--- a/src/graphics/d3d12/pipeline_cache.cpp
++++ b/src/graphics/d3d12/pipeline_cache.cpp
+@@ -763,6 +763,15 @@ void PipelineCache::EndSubmission() {
+     pipeline_storage_file_flush_needed_ = false;
+   }
+   if (!creation_threads_.empty()) {
++    // wet-recomp patch: measure how long this submission blocks on pipeline creation.
++    const uint64_t wait_start_tick = rex::chrono::Clock::QueryHostTickCount();
++    struct WaitTimer {
++      uint64_t start;
++      ~WaitTimer() {
++        PERF_counter_add(kPipelineWaitUs, int64_t((rex::chrono::Clock::QueryHostTickCount() - start) *
++                                                 1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
++      }
++    } wait_timer{wait_start_tick};
+     CreateQueuedPipelinesOnProcessorThread();
+     // Await creation of all queued pipelines.
+     bool await_creation_completion_event;
+@@ -1059,6 +1068,14 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
+                                             D3D12Shader::D3D12Translation& translation,
+                                             IDxbcConverter* dxbc_converter, IDxcUtils* dxc_utils,
+                                             IDxcCompiler* dxc_compiler) {
++  // wet-recomp patch: translation time (GPU thread at runtime, workers at startup).
++  struct TranslateTimer {
++    uint64_t start = rex::chrono::Clock::QueryHostTickCount();
++    ~TranslateTimer() {
++      PERF_counter_add(kShaderTranslateUs, int64_t((rex::chrono::Clock::QueryHostTickCount() - start) *
++                                                  1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
++    }
++  } translate_timer;
+   D3D12Shader& shader = static_cast<D3D12Shader&>(translation.shader());
+ 
+   // Perform translation.
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
 index 8f2fcb0..66fb7a6 100644
 --- a/src/graphics/graphics_system.cpp
