@@ -38,3 +38,17 @@
   shell even elevated; InstallAllUsers=1 elevated works.
 - Gotcha: shells opened before the install don't see the new PATH/JAVA_HOME; reload from registry.
 - Not yet verified: Ghidra actually loads XEXLoaderWV (check on first XEX import).
+
+## ReXGlue SDK build (2026-10-25)
+- Source: third_party/rexglue-sdk @ v0.10.0 (f5337cd), git-ignored; `scripts/build.py sdk`
+  clones it if missing, applies patches/rexglue-v0.10.0.diff, builds RelWithDebInfo, installs.
+- Install prefix: third_party/rexglue-sdk/out/install/win-amd64 (runtime DLLs: rexruntimerd,
+  rexgpu-xenosrd, TracyClientrd). Backend: D3D12 (Vulkan OFF on Windows by default).
+- CLI is NOT installed; use third_party/rexglue-sdk/out/win-amd64/RelWithDebInfo/rexgluerd.exe
+  (`rd` = RelWithDebInfo postfix). Subcommands: init, codegen, recompile-tests.
+- The SDK install registers itself in the CMake user package registry
+  (HKCU\Software\Kitware\CMake\Packages\rexglue) so find_package(rexglue) works.
+- Build: 656 steps, 469 warnings (third-party), 0 errors.
+- Patch 1: libmspack symlinks (see patches/README.md). Other symlinks: moltenvk (mac only),
+  o1heap/CLAUDE.md (docs) - harmless.
+- Gotcha: `cmd; tail log` reports tail's exit code; build logs now end with the real "exit N".
