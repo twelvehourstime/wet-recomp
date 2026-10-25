@@ -24,3 +24,17 @@
   LLVM 22.1.8 (matches ReXGlue v0.10.0 Windows CI: choco llvm on 2026-08-21, before 23.1.0),
   Python 3.14.9, Temurin JDK 21.0.12.1+1, Ghidra 12.1.3 (latest Ghidra 12.2 has no XEX loader yet),
   XEXLoaderWV 12.1.3. MSVC BuildTools 14.44 + Windows SDK 10.0.26100 already installed.
+
+## Toolchain (installed 2026-10-25, all SHA-256 verified against published digests)
+| Tool | Version | Location |
+|---|---|---|
+| LLVM/Clang | 22.1.8 | C:\Program Files\LLVM\bin (NOT on PATH; build scripts use full path) |
+| Python | 3.14.9 | C:\Program Files\Python314 (all-users; on PATH) |
+| JDK | Temurin 21.0.12.1+1 | C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot (JAVA_HOME set) |
+| Ghidra | 12.1.3 | E:\Tools\ghidra_12.1.3_PUBLIC |
+| XEXLoaderWV | 12.1.3 | E:\Tools\ghidra_12.1.3_PUBLIC\Ghidra\Extensions\XEXLoaderWV |
+- Installers kept in E:\Tools\_downloads.
+- Gotcha: Python per-user install fails (0x80070003, per-user Package Cache) from this
+  shell even elevated; InstallAllUsers=1 elevated works.
+- Gotcha: shells opened before the install don't see the new PATH/JAVA_HOME; reload from registry.
+- Not yet verified: Ghidra actually loads XEXLoaderWV (check on first XEX import).
