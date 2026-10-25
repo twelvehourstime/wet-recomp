@@ -76,9 +76,9 @@ void WetMouseLookHook(PPCRegister& r29) {
 
   dt = std::clamp(dt, 1.0 / 500.0, kStaleSeconds);
   const double rad_per_count = REXCVAR_GET(wet_mouse_sensitivity) * 3.14159265358979 / 180.0;
-  // The snapshot X has the opposite sign to the mouse/raw stick (after sub_829A64B8), so mouse
-  // right needs a negative X (verified in game). Mouse up (negative dy) = stick up.
-  const double up = REXCVAR_GET(wet_mouse_invert_y) ? double(dy) : -double(dy);
+  // After sub_829A64B8 both snapshot axes have the opposite sign to the raw stick, so mouse
+  // right needs a negative X and mouse up (negative dy) a negative Y (both verified in game).
+  const double up = REXCVAR_GET(wet_mouse_invert_y) ? -double(dy) : double(dy);
   const float add_x = float(-dx * rad_per_count / (dt * yaw_speed));
   const float add_y = float(up * rad_per_count / (dt * pitch_speed));
 
