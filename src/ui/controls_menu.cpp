@@ -9,6 +9,9 @@
 // controller emulation is suppressed (SDK patch) so binding a key does not also act in the game.
 // Shift/Ctrl/Alt pressed and released on their own bind as bare keys; held together with
 // another key they form a combination ("Shift+Up").
+//
+// Each game input also has an editable in-game action name (wet_action_<input>, "Wet/Actions"),
+// shown next to it in both tabs and saved with the bindings.
 
 #include "ui/controls_menu.h"
 
@@ -30,28 +33,60 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <string_view>
+
+REXCVAR_DEFINE_STRING(wet_action_A, "Jump", "Wet/Actions", "In-game action of A");
+REXCVAR_DEFINE_STRING(wet_action_B, "Slide", "Wet/Actions", "In-game action of B");
+REXCVAR_DEFINE_STRING(wet_action_X, "Melee", "Wet/Actions", "In-game action of X");
+REXCVAR_DEFINE_STRING(wet_action_Y, "Action", "Wet/Actions", "In-game action of Y");
+REXCVAR_DEFINE_STRING(wet_action_LB, "Wall Run", "Wet/Actions", "In-game action of LB");
+REXCVAR_DEFINE_STRING(wet_action_RB, "Shoot", "Wet/Actions", "In-game action of RB");
+REXCVAR_DEFINE_STRING(wet_action_LT, "", "Wet/Actions", "In-game action of LT");
+REXCVAR_DEFINE_STRING(wet_action_RT, "", "Wet/Actions", "In-game action of RT");
+REXCVAR_DEFINE_STRING(wet_action_Back, "Move List", "Wet/Actions", "In-game action of Back");
+REXCVAR_DEFINE_STRING(wet_action_Start, "Pause", "Wet/Actions", "In-game action of Start");
+REXCVAR_DEFINE_STRING(wet_action_LS, "", "Wet/Actions", "In-game action of left stick click");
+REXCVAR_DEFINE_STRING(wet_action_RS, "", "Wet/Actions", "In-game action of right stick click");
+REXCVAR_DEFINE_STRING(wet_action_DpadUp, "", "Wet/Actions", "In-game action of D-pad up");
+REXCVAR_DEFINE_STRING(wet_action_DpadDown, "", "Wet/Actions", "In-game action of D-pad down");
+REXCVAR_DEFINE_STRING(wet_action_DpadLeft, "", "Wet/Actions", "In-game action of D-pad left");
+REXCVAR_DEFINE_STRING(wet_action_DpadRight, "", "Wet/Actions", "In-game action of D-pad right");
 
 namespace wet::ui {
 namespace {
 
 struct KeyRow {
   const char* cvar;
-  const char* label;
+  const char* label;   // controller input this key drives
+  const char* pad_id;  // game input with a renamable action; nullptr = fixed action below
+  const char* fixed_action;
 };
 
 constexpr KeyRow kKeyRows[] = {
-    {"keybind_lstick_up", "Move forward"},     {"keybind_lstick_down", "Move back"},
-    {"keybind_lstick_left", "Move left"},      {"keybind_lstick_right", "Move right"},
-    {"keybind_a", "A"},                        {"keybind_b", "B"},
-    {"keybind_x", "X"},                        {"keybind_y", "Y"},
-    {"keybind_left_trigger", "LT"},            {"keybind_right_trigger", "RT"},
-    {"keybind_left_shoulder", "LB"},           {"keybind_right_shoulder", "RB"},
-    {"keybind_lstick_press", "Left stick click"}, {"keybind_rstick_press", "Right stick click"},
-    {"keybind_start", "Start"},                {"keybind_back", "Back"},
-    {"keybind_dpad_up", "D-pad up"},           {"keybind_dpad_down", "D-pad down"},
-    {"keybind_dpad_left", "D-pad left"},       {"keybind_dpad_right", "D-pad right"},
-    {"keybind_rstick_up", "Camera up (keys)"}, {"keybind_rstick_down", "Camera down (keys)"},
-    {"keybind_rstick_left", "Camera left (keys)"}, {"keybind_rstick_right", "Camera right (keys)"},
+    {"keybind_lstick_up", "Left stick", nullptr, "Move forward"},
+    {"keybind_lstick_down", "Left stick", nullptr, "Move back"},
+    {"keybind_lstick_left", "Left stick", nullptr, "Move left"},
+    {"keybind_lstick_right", "Left stick", nullptr, "Move right"},
+    {"keybind_right_shoulder", "RB", "RB", nullptr},
+    {"keybind_left_shoulder", "LB", "LB", nullptr},
+    {"keybind_a", "A", "A", nullptr},
+    {"keybind_b", "B", "B", nullptr},
+    {"keybind_x", "X", "X", nullptr},
+    {"keybind_y", "Y", "Y", nullptr},
+    {"keybind_right_trigger", "RT", "RT", nullptr},
+    {"keybind_left_trigger", "LT", "LT", nullptr},
+    {"keybind_back", "Back", "Back", nullptr},
+    {"keybind_start", "Start", "Start", nullptr},
+    {"keybind_lstick_press", "Left stick click", "LS", nullptr},
+    {"keybind_rstick_press", "Right stick click", "RS", nullptr},
+    {"keybind_dpad_up", "D-pad up", "DpadUp", nullptr},
+    {"keybind_dpad_down", "D-pad down", "DpadDown", nullptr},
+    {"keybind_dpad_left", "D-pad left", "DpadLeft", nullptr},
+    {"keybind_dpad_right", "D-pad right", "DpadRight", nullptr},
+    {"keybind_rstick_up", "Right stick", nullptr, "Camera up (keys)"},
+    {"keybind_rstick_down", "Right stick", nullptr, "Camera down (keys)"},
+    {"keybind_rstick_left", "Right stick", nullptr, "Camera left (keys)"},
+    {"keybind_rstick_right", "Right stick", nullptr, "Camera right (keys)"},
 };
 
 constexpr float kFontScale = 1.5f;
@@ -83,6 +118,17 @@ bool AnyHeld() {
 }
 
 std::string GetString(const char* cvar) { return rex::cvar::GetFlagByName(cvar); }
+
+// Inline editor for the in-game action name of game input `pad_id`.
+void ActionNameField(const char* pad_id) {
+  std::string cvar = std::string("wet_action_") + pad_id;
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%s", rex::cvar::GetFlagByName(cvar).c_str());
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  if (ImGui::InputTextWithHint("##action", "(name it)", buf, sizeof(buf))) {
+    rex::cvar::SetFlagByName(cvar, buf);
+  }
+}
 
 }  // namespace
 
@@ -163,15 +209,25 @@ void ControlsMenu::PollPadCapture() {
 void ControlsMenu::DrawKeyboardTab() {
   ImGui::TextDisabled("Bind replaces, Add keeps the existing keys. Esc cancels a capture.");
   if (ImGui::BeginTable("##keys", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-    ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthFixed, 260.0f * kFontScale);
+    ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthFixed, 150.0f * kFontScale);
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 200.0f * kFontScale);
     ImGui::TableSetupColumn("Keys");
-    ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, 240.0f * kFontScale);
+    ImGui::TableHeadersRow();
     for (const auto& row : kKeyRows) {
       ImGui::PushID(row.cvar);
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
+      ImGui::AlignTextToFramePadding();
       ImGui::TextUnformatted(row.label);
       ImGui::TableNextColumn();
+      if (row.pad_id) {
+        ActionNameField(row.pad_id);
+      } else {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(row.fixed_action);
+      }
+      ImGui::TableNextColumn();
+      ImGui::AlignTextToFramePadding();
       bool capturing = (capture_ == Capture::kKeyReplace || capture_ == Capture::kKeyAdd) &&
                        capture_cvar_ == row.cvar;
       if (capturing) {
@@ -180,7 +236,7 @@ void ControlsMenu::DrawKeyboardTab() {
         std::string v = GetString(row.cvar);
         ImGui::TextUnformatted(v.empty() ? "-" : v.c_str());
       }
-      ImGui::TableNextColumn();
+      ImGui::SameLine(0.0f, 20.0f);  // buttons directly after the bound keys
       if (ImGui::Button("Bind")) {
         capture_ = Capture::kKeyReplace;
         capture_cvar_ = row.cvar;
@@ -226,15 +282,20 @@ void ControlsMenu::DrawKeyboardTab() {
 void ControlsMenu::DrawControllerTab() {
   ImGui::TextDisabled("Choose which controller button performs each game input. Esc cancels.");
   if (ImGui::BeginTable("##pad", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-    ImGui::TableSetupColumn("Game input", ImGuiTableColumnFlags_WidthFixed, 260.0f * kFontScale);
+    ImGui::TableSetupColumn("Game input", ImGuiTableColumnFlags_WidthFixed, 150.0f * kFontScale);
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 200.0f * kFontScale);
     ImGui::TableSetupColumn("Controller button");
-    ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, 170.0f * kFontScale);
+    ImGui::TableHeadersRow();
     for (int i = 0; i < wet::pad::kControlCount; ++i) {
       ImGui::PushID(i);
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
+      ImGui::AlignTextToFramePadding();
       ImGui::TextUnformatted(wet::pad::GetControl(i).label);
       ImGui::TableNextColumn();
+      ActionNameField(wet::pad::GetControl(i).id);
+      ImGui::TableNextColumn();
+      ImGui::AlignTextToFramePadding();
       if (capture_ == Capture::kPad && capture_pad_index_ == i) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Press a controller button...");
       } else {
@@ -242,7 +303,7 @@ void ControlsMenu::DrawControllerTab() {
         int s = wet::pad::FindControl(src);
         ImGui::TextUnformatted(s >= 0 ? wet::pad::GetControl(s).label : "-");
       }
-      ImGui::TableNextColumn();
+      ImGui::SameLine(0.0f, 20.0f);  // buttons directly after the bound button
       if (ImGui::Button("Bind")) {
         capture_ = Capture::kPad;
         capture_pad_index_ = i;
