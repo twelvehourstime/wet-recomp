@@ -115,3 +115,26 @@
 - Runtime paths: --game_data_root required (scripts/run.py passes ../game); user data/saves
   default to Documents\wet; optional config wet.toml next to the exe; cache in user dir.
 - NOT launched yet.
+
+## First launch (2026-10-25, user-approved)
+- `scripts/run.py` -> wet.exe started, mapped guest memory, SDL input OK, then guest thread 4
+  died after ~0.3 s: `[FATAL] Call to invalid or unregistered function at guest address
+  0x83347B48` (REX_FATAL -> abort). No window content reached; exit code 3.
+- Log noise before it: NtCreateFile FAILED for GAME:\__dummy.ini and GAME:\engine.ini
+  (0xC000000F, file not found) - probably harmless probes; check against the disc listing later.
+  SDL warns gamecontrollerdb.txt missing (affects controller mappings; revisit in input work).
+- Crash reporter verified on a real guest crash: guest regs + back-chain correct
+  (xstart -> 0x83044270 -> bctrl 0x83347B48), report 3.7 KB, dump 289 KB.
+- Cause: xstart -> sub_83044270 walks the CRT static-init table 0x833A464C..0x833BD988
+  (25,807 words, 3,206 non-zero); 2 entries were never emitted as functions.
+- Wider check: tools/analysis/missing_ptr_funcs.py scans data sections for pointers into
+  .text that look like function starts and are not registered (list from
+  generated/default/wet_register.cpp). 75 candidates ->
+  * 2 static initializers + 19 MI this-adjust thunks (subi r3,r3,N; b) + 1 virtual method
+    (0x8332DE90, 13 refs) added to config/functions.toml (22 entries).
+  * The rest are C++ EH continuation labels inside functions (follow `or r8,r8,r8` markers
+    or a `bl`, use r31 as frame pointer) - not entry points, deliberately not added.
+    If C++ exceptions misbehave later, revisit these (codegen has generate_exception_handlers).
+- Gotcha: Python text files on Windows get CRLF; strip \r before shell comparisons.
+- Ghidra (A2ALT language) cannot decode VMX128 opcodes (e.g. 1BE00774) - shows `??`.
+- After fix: 73,380 functions registered, rebuild 0 warnings. Not relaunched yet.

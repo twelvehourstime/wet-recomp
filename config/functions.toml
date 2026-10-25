@@ -11,3 +11,30 @@
 0x82FED688 = { size = 0x8 }   # this-adjust thunk (r3 += 8) -> 0x82FEC040
 0x82F898D0 = { size = 0x10 }  # sets vtable then tail-calls 0x82F89760; from 0x83382E78
 0x82D43F78 = { size = 0x4 }   # thunk -> 0x82D436A8; from 0x833796B0
+
+# Reached only through data pointers (found by tools/analysis/missing_ptr_funcs.py).
+# Static-init table 0x833A464C..0x833BD988 (iterated by sub_83044270 from xstart):
+0x83347B48 = { size = 0x64 }  # static initializer, VMX128 code; first boot crash (invalid function)
+0x83356DB8 = { size = 0xC }  # static initializer thunk: r3 = 0x83380FA8 -> 0x831BAEC0
+# C++ multiple-inheritance this-adjust thunks in vtables (subi r3,r3,N ; b target):
+0x82FEE2D0 = { size = 0x8 }
+0x82FF8888 = { size = 0x8 }
+0x82FF8890 = { size = 0x8 }
+0x82FF8898 = { size = 0x8 }
+0x82FF88A0 = { size = 0x8 }
+0x82FF88B0 = { size = 0x8 }
+0x82FFD4A8 = { size = 0x8 }
+0x82FFD4B0 = { size = 0x8 }
+0x82FFD4B8 = { size = 0x8 }
+0x82FFD4C0 = { size = 0x8 }
+0x82FFD4C8 = { size = 0x8 }
+0x82FFD4D8 = { size = 0x8 }
+0x82FFD4E0 = { size = 0x8 }
+0x82FFD4E8 = { size = 0x8 }
+0x82FFD750 = { size = 0x8 }
+0x82FFD760 = { size = 0x8 }
+0x82FFD768 = { size = 0x8 }
+0x82FFD770 = { size = 0x8 }
+0x8300A900 = { size = 0x8 }
+# Virtual method, 13 data refs: this->+0xE4 |= 0x42, stores args, tail-calls 0x83302000
+0x8332DE90 = { size = 0x2C }

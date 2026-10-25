@@ -10,3 +10,8 @@
 0x82F898D0 ctor_set_vtable_823A2014      ; writes vtable 0x823A2014 then tail-calls 0x82F89760
 0x82D43F78 thunk_82D436A8                ; unconditional thunk
 0x831BAC4C __savegprlr_29                ; (likely) GPR save helper used by prologues
+0x83044270 crt_init_static               ; CRT startup: walks static-init table 0x833A464C..0x833BD988 calling each entry (from xstart)
+0x83347B48 static_init_83347B48          ; first static initializer (VMX128 code)
+0x83356DB8 static_init_83356DB8          ; static initializer thunk: r3=0x83380FA8 -> 0x831BAEC0
+0x8332DE90 vmethod_8332DE90              ; virtual method (13 vtable refs): this->+0xE4 |= 0x42, stores args, tail-calls 0x83302000
+0x831BAC48 __savegprlr_28                ; GPR save helper (confirmed by codegen naming)
