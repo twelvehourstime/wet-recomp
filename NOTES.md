@@ -138,3 +138,27 @@
 - Gotcha: Python text files on Windows get CRLF; strip \r before shell comparisons.
 - Ghidra (A2ALT language) cannot decode VMX128 opcodes (e.g. 1BE00774) - shows `??`.
 - After fix: 73,380 functions registered, rebuild 0 warnings. Not relaunched yet.
+
+## Milestone 1 reached: title screen (2026-10-25 03:47)
+Launches 2-4 (user approved relaunch loop):
+- Launch 2: no GPU emulation ("gpu_plugin not set"); the SDK cvar gpu_plugin defaults to ""
+  (headless). WetApp::OnPreSetup now sets config.gpu_plugin = "xenos" if empty.
+  Crash: unregistered 0x832654F8 (pointer built in code with lis+addi, no data ref).
+- Launch 3: D3D12 up on RTX 3090; crash: unregistered 0x82CF88C0 (functor manager,
+  predecessor instruction is `bctr`, which the scans did not accept as a function boundary).
+- Fix approach (tools/analysis/):
+  missing_ptr_funcs.py (data pointers) + missing_code_ptrs.py (lis+addi/ori pointers),
+  predecessor blr/bctr/b/padding; drop EH continuations (r31-frame access, `or r8,r8,r8`);
+  size_funcs.py-style check: accept only if every out-of-range branch targets a known function.
+  Then two codegen-driven rejections:
+  * conditional-branch targets (codegen can't make a `bc` into a tail call) - 6 removed;
+  * func_extents.py: entries inside another generated function's label range (parent still
+    branches across the cut -> "use of undeclared label") - 113 removed.
+  config/functions.toml now has 111 entries; build clean.
+- Launch 4: title screen "PRESS > TO BEGIN" renders correctly, ~717 MB RSS. Shader storage
+  works (2 shaders cached). Audio opens on 'Headset Earphone (INZONE Buds - Chat)' 48 kHz 2ch
+  - that is a chat/headset endpoint, check device choice in milestone 4.
+- Known noise: IoDismountVolumeByFileHandle stub, VFS 'ShaderDumpxe:' no device,
+  GAME:\__dummy.ini / engine.ini not found.
+- Not yet tested: pressing Start / menus / gameplay / audio audibly / controller.
+- run.py --no-crash-dialog sets WET_CRASH_NO_DIALOG=1 for unattended launches.

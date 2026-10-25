@@ -7,6 +7,7 @@ Passes --game_data_root and a timestamped --log_file under logs/.
 Refuses to start a second copy while the game is already running.
 """
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -20,6 +21,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="RelWithDebInfo")
     p.add_argument("--game", default=str(build.ROOT.parent / "game"))
+    p.add_argument("--no-crash-dialog", action="store_true",
+                   help="write crash report/dump without the blocking message box")
     p.add_argument("extra", nargs=argparse.REMAINDER)
     args = p.parse_args()
 
@@ -38,7 +41,10 @@ def main():
     extra = [a for a in args.extra if a != "--"]
     cmd = [str(exe), f"--game_data_root={args.game}", f"--log_file={log_file}", *extra]
     print("+", " ".join(cmd), flush=True)
-    sys.exit(subprocess.run(cmd, cwd=exe.parent).returncode)
+    env = dict(os.environ)
+    if args.no_crash_dialog:
+        env["WET_CRASH_NO_DIALOG"] = "1"
+    sys.exit(subprocess.run(cmd, cwd=exe.parent, env=env).returncode)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from pathlib import Path
 TEXT = (0x82510000, 0x8338A550)
 MFLR_R12 = 0x7D8802A6
 BLR = 0x4E800020
+BCTR = 0x4E800420
 
 
 def main():
@@ -33,7 +34,7 @@ def main():
         w, prev = code_word(a), code_word(a - 4)
         if w is None or w == 0:
             return False
-        return w == MFLR_R12 or prev in (0, BLR) or (prev is not None and prev >> 26 == 18)
+        return w == MFLR_R12 or prev in (0, BLR, BCTR) or (prev is not None and prev >> 26 == 18)
 
     refs = Counter()
     for start, data in blocks.items():
