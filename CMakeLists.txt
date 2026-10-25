@@ -18,6 +18,8 @@ set(WET_SOURCES
     src/patches/mouselook.cpp
     src/input_defaults.cpp
     src/debug/memtool.cpp
+    src/input/pad_remap.cpp
+    src/ui/controls_menu.cpp
 )
 
 if(WIN32)

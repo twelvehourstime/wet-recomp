@@ -10,7 +10,11 @@
 
 #include "crash/crash_handler.h"
 #include "debug/memtool.h"
+#include "input/pad_remap.h"
 #include "input_defaults.h"
+#include "ui/controls_menu.h"
+
+#include <rex/ui/keybinds.h>
 
 REXCVAR_DECLARE(std::string, perf_log_csv);
 
@@ -35,17 +39,29 @@ class WetApp : public rex::ReXApp {
   void OnPostInitLogging() override {
     if (!REXCVAR_GET(perf_log_csv).empty()) rex::perf::SetCsvLogPath(REXCVAR_GET(perf_log_csv));
     wet::ApplyInputDefaults();
+    wet::pad::Install();
   }
 
   void OnPostSetup() override { wet::memtool::StartIfEnabled(); }
 
+  void OnConfigurePaths(rex::PathConfig& paths) override { config_path_ = paths.config_path; }
+
+  // Controls menu (keyboard/mouse and controller bindings), toggled with F1.
+  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    controls_menu_ = std::make_unique<wet::ui::ControlsMenu>(drawer, config_path_);
+    rex::ui::RegisterBind("bind_wet_controls", "F1", "Toggle Wet controls menu",
+                          [this] { controls_menu_->Toggle(); });
+  }
+
   // Override virtual hooks for customization:
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
-  // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;
   // void OnShutdown() override {}
-  // void OnConfigurePaths(rex::PathConfig& paths) override {}
+
+ private:
+  std::filesystem::path config_path_;
+  std::unique_ptr<wet::ui::ControlsMenu> controls_menu_;
 };

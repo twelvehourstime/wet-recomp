@@ -1,3 +1,27 @@
+diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
+index 1cb3faa..6e1d14e 100644
+--- a/include/rex/input/input_system.h
++++ b/include/rex/input/input_system.h
+@@ -10,6 +10,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <functional>
+ #include <memory>
+ #include <vector>
+ 
+@@ -25,6 +26,11 @@ class Window;
+ 
+ namespace rex::input {
+ 
++// wet-recomp patch: optional filter applied to every real (non-synthetic) pad's state before
++// the per-user merge, e.g. for button remapping. Pass nullptr to remove. Thread-safe.
++using PadStateFilter = std::function<void(X_INPUT_STATE& state)>;
++void SetPadStateFilter(PadStateFilter filter);
++
+ class InputSystem : public system::IInputSystem {
+  public:
+   explicit InputSystem(rex::ui::Window* window);
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
 index c8751b7..bd61544 100644
 --- a/include/rex/input/mnk/mnk_input_driver.h
@@ -85,6 +109,55 @@ index 8f2fcb0..66fb7a6 100644
          return 0;
        }));
    // TODO: set_can_debugger_suspend not yet ported
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index 813bb1c..386c5a2 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -11,6 +11,8 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <memory>
++#include <mutex>
+ 
+ #include <rex/dbg.h>
+ #include <rex/input/device_assignment.h>
+@@ -32,6 +34,23 @@ namespace rex::input {
+ 
+ namespace {
+ 
++std::mutex g_pad_filter_mutex;
++std::shared_ptr<PadStateFilter> g_pad_filter;
++
++std::shared_ptr<PadStateFilter> CurrentPadFilter() {
++  std::lock_guard lock(g_pad_filter_mutex);
++  return g_pad_filter;
++}
++
++}  // namespace
++
++void SetPadStateFilter(PadStateFilter filter) {
++  std::lock_guard lock(g_pad_filter_mutex);
++  g_pad_filter = filter ? std::make_shared<PadStateFilter>(std::move(filter)) : nullptr;
++}
++
++namespace {
++
+ // Synthetic devices are parked past every physical ordinal so they cannot push
+ // a real pad off guest user 0. SlotAssignment routes them by their synthetic
+ // flag and never reads this value.
+@@ -233,6 +252,11 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     if (driver->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
+       continue;
+     }
++    if (const DeviceInfo* info = DeviceInfoFor(id); info && !info->synthetic) {
++      if (auto filter = CurrentPadFilter()) {
++        (*filter)(state);
++      }
++    }
+     active_devices_.Observe(user_index, id, state.gamepad);
+     if (!any) {
+       merged = state;
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
 index 3f9422d..0e9251e 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
