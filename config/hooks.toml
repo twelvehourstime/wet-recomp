@@ -7,11 +7,12 @@ name = "WetPresentIntervalHook"
 address = 0x83066E70
 registers = ["r11"]
 
-# Camera update (sub_829B1960): after both axes went through the integrator sub_829AB470
-# (angle += dt * speed * stick), new yaw is at r1+84 and new pitch at r1+80 (pitch is clamped
-# afterwards by sub_829AEFC0). f30 = yaw speed, f27 = pitch speed (their signs give the
-# stick->angle direction). Raw mouse counts are added here, 1:1, with no curve or ramp.
+# Player control snapshot (sub_829B8078): right stick was just read into player+164/+168 and
+# run through sub_829A64B8 (dead zone/curve); 0x829B812C is the join point either way.
+# The camera (sub_829B1960 -> sub_829AB470) turns by dt * speed * stick and other code uses a
+# non-zero stick to stop auto-follow, so mouse motion is injected here as the exact stick value
+# that turns the camera by the mouse angle. r29 = player.
 [[midasm_hook]]
 name = "WetMouseLookHook"
-address = 0x829B1AA8
-registers = ["r1", "f30", "f27"]
+address = 0x829B812C
+registers = ["r29"]
