@@ -162,3 +162,26 @@ Launches 2-4 (user approved relaunch loop):
   GAME:\__dummy.ini / engine.ini not found.
 - Not yet tested: pressing Start / menus / gameplay / audio audibly / controller.
 - run.py --no-crash-dialog sets WET_CRASH_NO_DIALOG=1 for unattended launches.
+
+## Milestone 2 session 1: menus + first level (2026-10-25 03:53-04:08)
+Launched with `run.py --no-crash-dialog -- --mnk_mode=true` (SDK keyboard->pad is OFF by
+default; defaults: Return=Start, Space=A, Backspace=B, L=X, P=Y, E/O=RT, Q/I=LT, WASD=LS,
+arrows=RS, Shift+arrows=D-pad). Driven with synthetic key presses (~0.2 s holds).
+Verified working (screenshots):
+- Bink intro video, middleware credits, title, auto-save notice.
+- Save device prompt -> "Create New Game": save written to
+  Documents\wet\B13EBABEBABEBABE\425307DB\00000001\WETSAVEGAME (+ Headers\00000001).
+- Difficulty select, loading screen + hints, opening text, in-engine cutscene with subtitles.
+- First level (Chinatown restaurant) gameplay: movement, jump, slide, shooting, enemy killed,
+  style counter, glass bullet decals, tutorial popups. Rubi model renders fully (old Xenia
+  showed only eyes/hair).
+- Pause menu, Load Last Checkpoint (reload OK), Quit to Menu, main menu "Resume Game" loads
+  the save.
+- ~8 min total, no crash, no new log warnings. RSS 1.7-1.9 GB.
+Not verified: audio audibly (I can't hear it), controller, anything past the first tutorial
+section, perf/frame pacing (milestone 4).
+Observations:
+- Log file stayed at 25 lines during the whole session: check flush behaviour
+  (log_flush_interval default) before relying on logs for diagnostics.
+- Blind scripted play is slow (tutorial popups pause the game); deeper coverage needs
+  milestone 3 input record/replay or human play.
