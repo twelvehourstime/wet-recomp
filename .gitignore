@@ -1,0 +1,46 @@
+# --- Game data: NEVER commit. Users bring their own copy. ---
+*.iso
+*.xex
+*.xexp
+*.xcp
+*.stfs
+*.god
+*.big
+*.pak
+*.arc
+*.xpr
+*.xma
+*.wav
+*.bik
+/game/
+/extracted/
+/assets/
+/data/
+
+# --- Generated recompiled code ---
+/generated/
+/out/
+**/ppc_recomp*.cpp
+**/ppc_func_mapping*.cpp
+
+# --- Build / third-party checkouts ---
+/build/
+/third_party/
+/sdk/
+*.dmp
+*.log
+/logs/
+/replays/local/
+/saves/
+
+# --- Ghidra project databases (may contain game code) ---
+*.gpr
+*.rep/
+/ghidra/
+
+# --- Tooling ---
+__pycache__/
+*.pyc
+.venv/
+.vs/
+.vscode/
