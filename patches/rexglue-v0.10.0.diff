@@ -23,10 +23,10 @@ index 1cb3faa..6e1d14e 100644
   public:
    explicit InputSystem(rex::ui::Window* window);
 diff --git a/include/rex/input/mnk/mnk_input_driver.h b/include/rex/input/mnk/mnk_input_driver.h
-index c8751b7..bd61544 100644
+index c8751b7..4708456 100644
 --- a/include/rex/input/mnk/mnk_input_driver.h
 +++ b/include/rex/input/mnk/mnk_input_driver.h
-@@ -25,6 +25,11 @@ namespace rex::input::mnk {
+@@ -25,6 +25,16 @@ namespace rex::input::mnk {
  void SetMouseLookActive(bool active);
  bool IsMouseLookActive();
  
@@ -34,6 +34,11 @@ index c8751b7..bd61544 100644
 +// games that apply them to the camera directly. Returns the counts since the last call and
 +// the seconds elapsed since that call. Not affected by mnk_sensitivity.
 +void TakeRawMouseDelta(float& dx, float& dy, double& seconds_since_last_take);
++
++// wet-recomp patch: while suppressed the keyboard/mouse device reports a neutral pad but keeps
++// updating mouse capture (so SetMouseLookActive(false) frees the cursor at once), e.g. while a
++// game menu overlay is open.
++void SetMnkInputSuppressed(bool suppressed);
 +
  class MnkInputDriver final : public InputDriver,
                               public rex::ui::WindowInputListener,
@@ -159,10 +164,10 @@ index 813bb1c..386c5a2 100644
      if (!any) {
        merged = state;
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
-index 3f9422d..0e9251e 100644
+index 3f9422d..e77cef6 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
 +++ b/src/input/mnk/mnk_input_driver.cpp
-@@ -18,6 +18,7 @@
+@@ -18,15 +18,20 @@
  #include <rex/ui/window.h>
  
  #include <algorithm>
@@ -170,7 +175,10 @@ index 3f9422d..0e9251e 100644
  #include <cmath>
  #include <cstdlib>
  #include <cstring>
-@@ -27,6 +28,9 @@ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller
++#include <initializer_list>
+ #include <string_view>
+ 
+ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller emulation");
  REXCVAR_DEFINE_BOOL(mnk_mouse, false, "Input",
                      "Use the mouse for the right stick. Off means the right stick comes "
                      "from the keybind_rstick_* keys only");
@@ -180,17 +188,60 @@ index 3f9422d..0e9251e 100644
  REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
      .range(0.01, 10.0);
  
-@@ -137,8 +141,26 @@ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t l
+@@ -122,23 +127,65 @@ std::string_view TrimSpaces(std::string_view s) {
+   return s;
+ }
+ 
++// wet-recomp patch: keys that some binding uses with a modifier prefix ("Shift+Up").
++// Only those keep exact modifier matching (so the D-pad can share the arrow keys); other plain
++// keys fire whatever modifiers are held, so e.g. Shift (aim) + W (move) both work.
++bool g_prefixed_key[256];
++
++bool IsModifierKey(rex::ui::VirtualKey vk) {
++  return vk == rex::ui::VirtualKey::kShift || vk == rex::ui::VirtualKey::kControl ||
++         vk == rex::ui::VirtualKey::kMenu;
++}
++
+ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t live_mods) {
+   uint8_t want = TakeModifiers(token);
+-  if (want != live_mods) {
+-    return false;
+-  }
+   rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(token);
+   if (vk == rex::ui::VirtualKey::kNone) {
+     return false;
+   }
+   uint16_t idx = static_cast<uint16_t>(vk);
+-  return idx < 256 && key_down[idx];
++  if (idx >= 256) {
++    return false;
++  }
++  // A bare modifier ("Shift") is just that key being held.
++  if (want == 0 && IsModifierKey(vk)) {
++    return key_down[idx];
++  }
++  if (want != 0 || g_prefixed_key[idx]) {
++    if (want != live_mods) {
++      return false;
++    }
++  }
++  return key_down[idx];
+ }
  
  std::atomic<bool> mouse_look_active{true};
- 
++std::atomic<bool> mnk_input_suppressed{false};
++
 +std::mutex raw_mouse_mutex;
 +float raw_mouse_dx = 0.0f;
 +float raw_mouse_dy = 0.0f;
 +std::chrono::steady_clock::time_point raw_mouse_last_take{};
-+
+ 
  }  // namespace
  
++void SetMnkInputSuppressed(bool suppressed) {
++  mnk_input_suppressed.store(suppressed, std::memory_order_relaxed);
++}
++
 +void TakeRawMouseDelta(float& dx, float& dy, double& seconds_since_last_take) {
 +  std::lock_guard lock(raw_mouse_mutex);
 +  auto now = std::chrono::steady_clock::now();
@@ -207,7 +258,62 @@ index 3f9422d..0e9251e 100644
  void SetMouseLookActive(bool active) {
    mouse_look_active.store(active, std::memory_order_relaxed);
  }
-@@ -331,7 +353,7 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -200,6 +247,26 @@ bool MnkInputDriver::IsEnabled() const {
+   return REXCVAR_GET(mnk_mode);
+ }
+ 
++// Recomputes g_prefixed_key from every controller keybind (wet-recomp patch).
++static void UpdatePrefixedKeys(std::initializer_list<const std::string*> binds) {
++  std::memset(g_prefixed_key, 0, sizeof(g_prefixed_key));
++  for (const std::string* bind : binds) {
++    std::string_view rest(*bind);
++    while (!rest.empty()) {
++      size_t comma = rest.find(',');
++      std::string_view token = TrimSpaces(rest.substr(0, comma));
++      rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
++      if (TakeModifiers(token) == 0) {
++        continue;
++      }
++      uint16_t idx = static_cast<uint16_t>(rex::ui::ParseVirtualKey(token));
++      if (idx > 0 && idx < 256) {
++        g_prefixed_key[idx] = true;
++      }
++    }
++  }
++}
++
+ static bool IsBindPressed(const bool (&key_down)[256], const std::string& cvar_val) {
+   const uint8_t live_mods = LiveModifiers(key_down);
+   std::string_view rest(cvar_val);
+@@ -264,7 +331,7 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+   QueueMouseCaptureUpdate(IsEnabled() && REXCVAR_GET(mnk_mouse) && IsMouseLookActive() &&
+                           has_focus_ && is_active());
+ 
+-  if (!is_active() || !has_focus_) {
++  if (!is_active() || !has_focus_ || mnk_input_suppressed.load(std::memory_order_relaxed)) {
+     if (out_state) {
+       std::memset(out_state, 0, sizeof(*out_state));
+       out_state->packet_number = packet_number_;
+@@ -273,6 +340,18 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+   }
+ 
+   std::lock_guard lock(state_mutex_);
++  UpdatePrefixedKeys({&REXCVAR_GET(keybind_a), &REXCVAR_GET(keybind_b), &REXCVAR_GET(keybind_x),
++                      &REXCVAR_GET(keybind_y), &REXCVAR_GET(keybind_left_trigger),
++                      &REXCVAR_GET(keybind_right_trigger), &REXCVAR_GET(keybind_left_shoulder),
++                      &REXCVAR_GET(keybind_right_shoulder), &REXCVAR_GET(keybind_lstick_up),
++                      &REXCVAR_GET(keybind_lstick_down), &REXCVAR_GET(keybind_lstick_left),
++                      &REXCVAR_GET(keybind_lstick_right), &REXCVAR_GET(keybind_lstick_press),
++                      &REXCVAR_GET(keybind_rstick_up), &REXCVAR_GET(keybind_rstick_down),
++                      &REXCVAR_GET(keybind_rstick_left), &REXCVAR_GET(keybind_rstick_right),
++                      &REXCVAR_GET(keybind_rstick_press), &REXCVAR_GET(keybind_dpad_up),
++                      &REXCVAR_GET(keybind_dpad_down), &REXCVAR_GET(keybind_dpad_left),
++                      &REXCVAR_GET(keybind_dpad_right), &REXCVAR_GET(keybind_back),
++                      &REXCVAR_GET(keybind_start), &REXCVAR_GET(keybind_guide)});
+ 
+   uint16_t buttons = 0;
+   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_a)))
+@@ -331,7 +410,7 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
      ry -= INT16_MAX;
  
@@ -216,7 +322,7 @@ index 3f9422d..0e9251e 100644
      double sensitivity = REXCVAR_GET(mnk_sensitivity);
      constexpr double kBaseScale = 200.0;
      rx += static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale);
-@@ -541,13 +563,21 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+@@ -541,13 +620,21 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
    int32_t y = e.y();
    {
      std::lock_guard lock(state_mutex_);

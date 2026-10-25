@@ -6,7 +6,9 @@
 // Save writes every non-default cvar to the config file (<exe>/wet.toml) via the SDK.
 //
 // While the menu is open, mouse look is released (cursor visible, clickable) and keyboard/mouse
-// controller emulation is paused so binding a key does not also act in the game.
+// controller emulation is suppressed (SDK patch) so binding a key does not also act in the game.
+// Shift/Ctrl/Alt pressed and released on their own bind as bare keys; held together with
+// another key they form a combination ("Shift+Up").
 
 #include "ui/controls_menu.h"
 
@@ -52,6 +54,8 @@ constexpr KeyRow kKeyRows[] = {
     {"keybind_rstick_left", "Camera left (keys)"}, {"keybind_rstick_right", "Camera right (keys)"},
 };
 
+constexpr float kFontScale = 1.5f;
+
 constexpr const char* kMouseCvars[] = {"wet_mouse_sensitivity", "wet_mouse_invert_y",
                                        "wet_raw_mouse"};
 
@@ -93,14 +97,8 @@ void ControlsMenu::SetVisible(bool visible) {
   if (visible == visible_) return;
   visible_ = visible;
   capture_ = Capture::kNone;
-  if (visible) {
-    mnk_was_enabled_ = GetString("mnk_mode") == "true";
-    rex::cvar::SetFlagByName("mnk_mode", "false");
-    rex::input::mnk::SetMouseLookActive(false);
-  } else {
-    rex::cvar::SetFlagByName("mnk_mode", mnk_was_enabled_ ? "true" : "false");
-    rex::input::mnk::SetMouseLookActive(true);
-  }
+  rex::input::mnk::SetMnkInputSuppressed(visible);
+  rex::input::mnk::SetMouseLookActive(!visible);
 }
 
 void ControlsMenu::PollKeyCapture() {
@@ -113,14 +111,24 @@ void ControlsMenu::PollKeyCapture() {
     status_ = "Cancelled";
     return;
   }
-  int vk = FirstHeldKey();
-  if (!vk) return;
-  std::string name = rex::ui::VirtualKeyToString(static_cast<rex::ui::VirtualKey>(vk));
-  std::string mods;
-  if (Down(VK_CONTROL)) mods += "Ctrl+";
-  if (Down(VK_MENU)) mods += "Alt+";
-  if (Down(VK_SHIFT)) mods += "Shift+";
-  std::string token = mods + name;
+  std::string token;
+  if (int vk = FirstHeldKey()) {
+    std::string mods;
+    if (Down(VK_CONTROL)) mods += "Ctrl+";
+    if (Down(VK_MENU)) mods += "Alt+";
+    if (Down(VK_SHIFT)) mods += "Shift+";
+    token = mods + rex::ui::VirtualKeyToString(static_cast<rex::ui::VirtualKey>(vk));
+    lone_modifier_ = 0;
+  } else if (Down(VK_SHIFT) || Down(VK_CONTROL) || Down(VK_MENU)) {
+    // Remember a modifier held on its own; it binds when released without another key.
+    if (!lone_modifier_) lone_modifier_ = Down(VK_SHIFT) ? VK_SHIFT : Down(VK_CONTROL) ? VK_CONTROL : VK_MENU;
+    return;
+  } else if (lone_modifier_) {
+    token = rex::ui::VirtualKeyToString(static_cast<rex::ui::VirtualKey>(lone_modifier_));
+    lone_modifier_ = 0;
+  } else {
+    return;
+  }
   std::string value = token;
   if (capture_ == Capture::kKeyAdd) {
     std::string current = GetString(capture_cvar_.c_str());
@@ -155,9 +163,9 @@ void ControlsMenu::PollPadCapture() {
 void ControlsMenu::DrawKeyboardTab() {
   ImGui::TextDisabled("Bind replaces, Add keeps the existing keys. Esc cancels a capture.");
   if (ImGui::BeginTable("##keys", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-    ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+    ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthFixed, 260.0f * kFontScale);
     ImGui::TableSetupColumn("Keys");
-    ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+    ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, 240.0f * kFontScale);
     for (const auto& row : kKeyRows) {
       ImGui::PushID(row.cvar);
       ImGui::TableNextRow();
@@ -173,19 +181,21 @@ void ControlsMenu::DrawKeyboardTab() {
         ImGui::TextUnformatted(v.empty() ? "-" : v.c_str());
       }
       ImGui::TableNextColumn();
-      if (ImGui::SmallButton("Bind")) {
+      if (ImGui::Button("Bind")) {
         capture_ = Capture::kKeyReplace;
         capture_cvar_ = row.cvar;
         capture_armed_ = false;
+        lone_modifier_ = 0;
       }
       ImGui::SameLine();
-      if (ImGui::SmallButton("Add")) {
+      if (ImGui::Button("Add")) {
         capture_ = Capture::kKeyAdd;
         capture_cvar_ = row.cvar;
         capture_armed_ = false;
+        lone_modifier_ = 0;
       }
       ImGui::SameLine();
-      if (ImGui::SmallButton("Clear")) rex::cvar::SetFlagByName(row.cvar, "");
+      if (ImGui::Button("Clear")) rex::cvar::SetFlagByName(row.cvar, "");
       ImGui::PopID();
     }
     ImGui::EndTable();
@@ -216,9 +226,9 @@ void ControlsMenu::DrawKeyboardTab() {
 void ControlsMenu::DrawControllerTab() {
   ImGui::TextDisabled("Choose which controller button performs each game input. Esc cancels.");
   if (ImGui::BeginTable("##pad", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-    ImGui::TableSetupColumn("Game input", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+    ImGui::TableSetupColumn("Game input", ImGuiTableColumnFlags_WidthFixed, 260.0f * kFontScale);
     ImGui::TableSetupColumn("Controller button");
-    ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, 170.0f * kFontScale);
     for (int i = 0; i < wet::pad::kControlCount; ++i) {
       ImGui::PushID(i);
       ImGui::TableNextRow();
@@ -233,13 +243,14 @@ void ControlsMenu::DrawControllerTab() {
         ImGui::TextUnformatted(s >= 0 ? wet::pad::GetControl(s).label : "-");
       }
       ImGui::TableNextColumn();
-      if (ImGui::SmallButton("Bind")) {
+      if (ImGui::Button("Bind")) {
         capture_ = Capture::kPad;
         capture_pad_index_ = i;
         capture_armed_ = false;
+        lone_modifier_ = 0;
       }
       ImGui::SameLine();
-      if (ImGui::SmallButton("Clear")) wet::pad::SetSource(i, "None");
+      if (ImGui::Button("Clear")) wet::pad::SetSource(i, "None");
       ImGui::PopID();
     }
     ImGui::EndTable();
@@ -257,10 +268,7 @@ void ControlsMenu::DrawControllerTab() {
 }
 
 void ControlsMenu::Save() {
-  // Save the real mnk_mode, not the "paused while the menu is open" value.
-  rex::cvar::SetFlagByName("mnk_mode", mnk_was_enabled_ ? "true" : "false");
   rex::cvar::SaveConfig(config_path_);
-  rex::cvar::SetFlagByName("mnk_mode", "false");
   status_ = "Saved to " + config_path_.filename().string();
 }
 
@@ -269,11 +277,17 @@ void ControlsMenu::OnDraw(ImGuiIO& /*io*/) {
   if (capture_ == Capture::kKeyReplace || capture_ == Capture::kKeyAdd) PollKeyCapture();
   if (capture_ == Capture::kPad) PollPadCapture();
 
-  ImGui::SetNextWindowSize(ImVec2(640, 620), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver,
-                          ImVec2(0.5f, 0.5f));
+  // Large, readable window: ~70% x 85% of the screen, 1.5x text, roomy buttons.
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x * 0.70f, vp->WorkSize.y * 0.85f),
+                           ImGuiCond_Appearing);
+  ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 7.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.0f, 9.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(10.0f, 6.0f));
   bool open = true;
   if (ImGui::Begin("Controls (F1)##wet", &open, ImGuiWindowFlags_NoCollapse)) {
+    ImGui::SetWindowFontScale(kFontScale);
     if (ImGui::BeginTabBar("##tabs")) {
       if (ImGui::BeginTabItem("Keyboard & Mouse")) {
         DrawKeyboardTab();
@@ -295,6 +309,7 @@ void ControlsMenu::OnDraw(ImGuiIO& /*io*/) {
     }
   }
   ImGui::End();
+  ImGui::PopStyleVar(3);
   if (!open) SetVisible(false);
 }
 

@@ -32,12 +32,12 @@ class ControlsMenu final : public rex::ui::ImGuiDialog {
 
   std::filesystem::path config_path_;
   bool visible_ = false;
-  bool mnk_was_enabled_ = false;
 
   Capture capture_ = Capture::kNone;
   std::string capture_cvar_;   // keyboard: keybind cvar being edited
   int capture_pad_index_ = -1; // controller: game input being edited
   bool capture_armed_ = false; // all keys/buttons released since capture started
+  int lone_modifier_ = 0;      // Shift/Ctrl/Alt held alone during a key capture
   std::string status_;
 };
 
