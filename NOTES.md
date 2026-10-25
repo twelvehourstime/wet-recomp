@@ -252,3 +252,40 @@ Tools added: src/debug/memtool.cpp (--wet_memtool): dump.req (all committed gues
   poke.req, watch.req (PAGE_GUARD data watchpoint, logs host fn = sub_<guest addr>);
   tools/analysis/memdiff.py, show_func.py. Note dumps are 1.6 GB each (E:\WET\work\memtool).
 - NOT yet verified: actual mouse feel / sensitivity / pitch direction with a real mouse.
+
+## Mouse look, final approach (2026-10-25)
+- Writing yaw/pitch directly in the camera update (0x829B1AA8) did NOT work: with a zero stick the
+  camera's auto-follow re-derives the angles every frame (hook diagnostics: our delta never
+  survived to the next frame) and other code uses a non-zero stick snapshot to stop auto-follow.
+- Working: WetMouseLookHook @0x829B812C (r29 = player) in the control snapshot sub_829B8078, after
+  sub_829A64B8 processed the right stick: stick += mouse_rad / (dt * |speed|), speed from
+  [player+500]+80 (yaw) / +92 (pitch), dt = real time since last poll. Both snapshot axes are
+  negated relative to the raw stick -> add_x = -dx..., up = +dy (user-verified directions).
+  Feels 1:1 to the user at 0.05 deg/count. Caveat: game slow-mo scales its dt, real dt is used here.
+- Lesson: I claimed the first mouse version worked without being able to test a real mouse.
+  Synthetic SendInput moves don't reach SDL relative mode; real-mouse tests need the user.
+
+## Controls menu (F1), 2026-10-25 - user-tested OK
+- src/ui/controls_menu.{h,cpp}: Keyboard & Mouse tab (keybind_* with key/mouse-button capture,
+  Bind/Add/Clear beside the binding, bare Shift/Ctrl/Alt, mouse sensitivity/invert/raw toggle),
+  Controller tab (wet_pad_* remap via src/input/pad_remap.cpp, press-a-button capture, swap
+  sticks, invert right Y), editable action names wet_action_* (defaults from user: RB Shoot,
+  LB Wall Run, A Jump, B Slide, X Melee, Y Action, Back Move List, Start Pause), Save -> wet.toml.
+  Large window (70%x85% of screen, 1.5x font). Open/close: F1 (cvar bind_wet_controls).
+- SDK patches 4 (SetPadStateFilter) and 5 (bare-modifier binds, plain keys ignore modifiers
+  unless the key is also used with a prefix, SetMnkInputSuppressed for menus).
+- Controller (Xbox One pad) works through SDL backend; merged with keyboard/mouse on player 1.
+- Not verified: whether remapped pad buttons apply in menus that read keystroke events
+  (XamInputGetKeystrokeEx) rather than GetState.
+
+## Pause point (2026-10-25 night) - where to resume
+Done: M1 (title screen), 60 fps + frame pacing patch, raw mouse look, controller support, F1
+Controls menu. User has played into the Chinatown alley section without crashes.
+Open items:
+- Milestone 2 (crash fixes): continue via user playtesting; crash reports in out/build/.../crashes.
+- Milestone 3: input record/replay, save backup/restore, section select (not started).
+- Milestone 4: remaining frame-time jitter (~25% of frames >0.8 ms off), audio latency logging,
+  audio device choice (currently opens 'Headset Earphone (INZONE Buds - Chat)').
+- Proper KB/M default layout once the user knows all actions (action names now in the menu).
+- Cleanup: remove the unused SDK mouse diag leftovers if any; consider Release build later.
+- Process: never taskkill the game inside a build command without asking (happened once).
