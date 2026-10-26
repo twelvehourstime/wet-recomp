@@ -5,6 +5,7 @@
 #include <rex/ui/imgui_dialog.h>
 
 #include <filesystem>
+#include <set>
 #include <string>
 
 namespace wet::ui {

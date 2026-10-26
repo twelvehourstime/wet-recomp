@@ -19,6 +19,7 @@
 
 #include <rex/cvar.h>
 #include <rex/input/mnk/mnk_input_driver.h>
+#include <rex/logging.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/virtual_key.h>
 
@@ -33,7 +34,9 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <fstream>
 #include <string_view>
+#include <vector>
 
 REXCVAR_DEFINE_STRING(wet_action_A, "Jump", "Wet/Actions", "In-game action of A");
 REXCVAR_DEFINE_STRING(wet_action_B, "Slide", "Wet/Actions", "In-game action of B");
@@ -328,9 +331,51 @@ void ControlsMenu::DrawControllerTab() {
   }
 }
 
+// Writes the config file itself rather than through rex::cvar::SaveConfig: that writes every
+// non-default cvar, which also captured one-off launch flags (log file, perf CSV, game root)
+// and gave no way to see what was written. Only values the user set in-app or that came from
+// the file are persisted, and every input binding is written explicitly so a binding that
+// happens to equal its default still round-trips.
 void ControlsMenu::Save() {
-  rex::cvar::SaveConfig(config_path_);
-  status_ = "Saved to " + config_path_.filename().string();
+  std::vector<std::string> names;
+  for (const auto& row : kKeyRows) names.push_back(row.cvar);
+  for (int i = 0; i < wet::pad::kControlCount; ++i) {
+    names.push_back(std::string("wet_pad_") + wet::pad::GetControl(i).id);
+    names.push_back(std::string("wet_action_") + wet::pad::GetControl(i).id);
+  }
+  for (const char* c : {"wet_mouse_sensitivity", "wet_mouse_invert_y", "wet_raw_mouse",
+                        "wet_pad_swap_sticks", "wet_pad_invert_look_y", "bind_wet_controls"})
+    names.push_back(c);
+  std::set<std::string> explicit_names(names.begin(), names.end());
+
+  std::ofstream out(config_path_);
+  if (!out) {
+    status_ = "Could not write " + config_path_.string();
+    REXLOG_ERROR("controls: {}", status_);
+    return;
+  }
+  out << "# wet-recomp settings (written by the F1 Controls menu)\n";
+  int written = 0;
+  auto write = [&](const std::string& name) {
+    std::string value = rex::cvar::GetFlagByName(name);
+    bool is_number = !value.empty() && (value == "true" || value == "false" ||
+                                        value.find_first_not_of("0123456789.-") == std::string::npos);
+    out << name << " = " << (is_number ? value : "\"" + value + "\"") << "\n";
+    ++written;
+  };
+  for (const auto& name : names) write(name);
+  // Other settings the user changed in-app (settings overlay, console) or loaded from the file.
+  for (const auto& name : rex::cvar::ListFlags()) {
+    if (explicit_names.count(name)) continue;
+    auto src = rex::cvar::GetFlagSource(name);
+    if ((src == rex::cvar::Source::kRuntime || src == rex::cvar::Source::kConfig) &&
+        rex::cvar::HasNonDefaultValue(name) && name != "mnk_mode" && name != "mnk_mouse" &&
+        name != "mnk_mouse_to_stick") {
+      write(name);
+    }
+  }
+  status_ = "Saved " + std::to_string(written) + " settings to " + config_path_.filename().string();
+  REXLOG_INFO("controls: {} (keybind_a={})", status_, rex::cvar::GetFlagByName("keybind_a"));
 }
 
 void ControlsMenu::OnDraw(ImGuiIO& /*io*/) {

@@ -42,3 +42,8 @@ rexglue_apply_target_settings(crash_selftest)
 add_custom_command(TARGET crash_selftest POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:crash_selftest> $<TARGET_FILE_DIR:crash_selftest>
     COMMAND_EXPAND_LISTS)
+
+# cvar save/load self-test (links the SDK runtime only; never loads the game).
+add_executable(cvar_selftest src/debug/cvar_selftest.cpp)
+target_link_libraries(cvar_selftest PRIVATE rex::runtime)
+rexglue_apply_target_settings(cvar_selftest)

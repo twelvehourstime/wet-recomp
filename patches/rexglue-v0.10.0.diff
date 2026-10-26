@@ -44,22 +44,23 @@ index c8751b7..4708456 100644
                               public rex::ui::WindowInputListener,
                               public rex::ui::WindowListener {
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index b3947e0..e318030 100644
+index b3947e0..4a30c79 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -49,6 +49,10 @@ enum class CounterId : uint16_t {
+@@ -49,6 +49,11 @@ enum class CounterId : uint16_t {
    kPipelineCacheHits,
    kPipelineCacheMisses,
  
 +  // wet-recomp patch: GPU-thread time blocked on pipeline creation / shader translation
 +  kPipelineWaitUs,
 +  kShaderTranslateUs,
++  kPresentIntervalUs,
 +
    kCount  // sentinel -- must be last
  };
  
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index 536009e..eb0c3da 100644
+index 536009e..d82faca 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -17,6 +17,9 @@
@@ -72,25 +73,27 @@ index 536009e..eb0c3da 100644
  #include <cstring>
  
  REXCVAR_DEFINE_STRING(perf_log_csv, "", "Perf",
-@@ -49,6 +52,8 @@ constexpr const char* kCounterNames[] = {
+@@ -49,6 +52,9 @@ constexpr const char* kCounterNames[] = {
      "texture_cache_misses",
      "pipeline_cache_hits",
      "pipeline_cache_misses",
 +    "pipeline_wait_us",
 +    "shader_translate_us",
++    "present_interval_us",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -72,6 +77,8 @@ constexpr bool kIsGauge[] = {
+@@ -72,6 +78,9 @@ constexpr bool kIsGauge[] = {
      false,  // kTextureCacheMisses
      false,  // kPipelineCacheHits
      false,  // kPipelineCacheMisses
 +    false,  // kPipelineWaitUs
 +    false,  // kShaderTranslateUs
++    false,  // kPresentIntervalUs   (set each present)
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
  
-@@ -137,7 +144,12 @@ void SetCsvLogPath(const std::string& path) {
+@@ -137,7 +146,12 @@ void SetCsvLogPath(const std::string& path) {
    if (path.empty())
      return;
  
@@ -449,6 +452,98 @@ index 3f9422d..e77cef6 100644
      }
    }
    prev_mouse_x_ = x;
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+index 7360ed9..326bed3 100644
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -15,11 +15,16 @@
+ #include <utility>
+ 
+ #include <rex/assert.h>
++#include <rex/chrono/clock.h>
++#include <rex/perf/counter.h>
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+ #include <rex/platform.h>
+ #include <rex/ui/presenter.h>
+ #include <rex/ui/window.h>
++#if REX_PLATFORM_WIN32
++#include "../core/platform_win.h"
++#endif
+ 
+ #if defined(REX_HAS_FIDELITYFX_RUNTIME) && REX_HAS_FIDELITYFX_RUNTIME
+ #include <ffx_api/ffx_api.h>
+@@ -277,6 +282,62 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
+ namespace rex {
+ namespace ui {
+ 
++// wet-recomp patch: present guest frames on a fixed cadence instead of the moment the guest
++// finishes them. The host presents without vsync (tearing / VRR), so without this the
++// frame-to-frame variation of the guest's render time (measured +-2 ms) goes straight to the
++// display as judder. Each present waits for the next period boundary (at most one period of
++// added latency); if the guest falls behind, the schedule re-syncs instead of queueing.
++REXCVAR_DEFINE_DOUBLE(present_pace_hz, 60.0, "UI/Presenter",
++                      "Present guest output on a fixed cadence of this many Hz (0 = as soon as "
++                      "each frame is ready)")
++    .range(0.0, 500.0);
++
++namespace {
++
++void PaceGuestPresent() {
++  static uint64_t next_deadline = 0;
++  static uint64_t last_present = 0;
++  const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();
++  const double hz = REXCVAR_GET(present_pace_hz);
++  uint64_t now = rex::chrono::Clock::QueryHostTickCount();
++  if (hz > 0.0) {
++    const uint64_t period = uint64_t(double(freq) / hz);
++    if (next_deadline == 0 || now > next_deadline + period) {
++      next_deadline = now;  // first frame, or fell behind: re-sync rather than catch up
++    }
++    if (now < next_deadline) {
++#if REX_PLATFORM_WIN32
++      static HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr,
++                                                  CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
++                                                  TIMER_ALL_ACCESS);
++      int64_t remaining_100ns = int64_t((next_deadline - now) * 10000000ull / freq) - 5000;
++      if (timer && remaining_100ns > 0) {
++        LARGE_INTEGER due;
++        due.QuadPart = -remaining_100ns;
++        if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
++          WaitForSingleObject(timer, INFINITE);
++        }
++      }
++#endif
++      while ((now = rex::chrono::Clock::QueryHostTickCount()) < next_deadline) {
++#if REX_PLATFORM_WIN32
++        YieldProcessor();
++#else
++        std::this_thread::yield();
++#endif
++      }
++    }
++    next_deadline += period;
++  }
++  if (last_present) {
++    PERF_counter_set(kPresentIntervalUs, int64_t((now - last_present) * 1000000 / freq));
++  }
++  last_present = now;
++}
++
++}  // namespace
++
++
+ void Presenter::FatalErrorHostGpuLossCallback([[maybe_unused]] bool is_responsible,
+                                               [[maybe_unused]] bool statically_from_ui_thread) {
+   rex::FatalError("Graphics device lost (probably due to an internal error)");
+@@ -628,6 +689,7 @@ bool Presenter::RefreshGuestOutput(
+       case PaintMode::kGuestOutputThreadImmediately:
+         // Both painting and window paint requesting are accessible.
+         if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedPaintable) {
++          PaceGuestPresent();  // wet-recomp patch
+           paint_result = PaintAndPresent(false);
+           if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedOutdated) {
+             RequestPaintOrConnectionRecoveryViaWindow(true);
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
 index f102b56..ba610bb 100644
 --- a/thirdparty/CMakeLists.txt

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <rex/cvar.h>
+#include <rex/logging.h>
 #include <rex/perf/counter.h>
 #include <rex/rex_app.h>
 
@@ -40,6 +41,9 @@ class WetApp : public rex::ReXApp {
     if (!REXCVAR_GET(perf_log_csv).empty()) rex::perf::SetCsvLogPath(REXCVAR_GET(perf_log_csv));
     wet::ApplyInputDefaults();
     wet::pad::Install();
+    for (const char* n : {"keybind_a", "keybind_right_trigger", "wet_pad_A", "wet_action_A"})
+      REXLOG_INFO("controls: at startup {} = '{}' (source {})", n, rex::cvar::GetFlagByName(n),
+                  int(rex::cvar::GetFlagSource(n)));
   }
 
   void OnPostSetup() override { wet::memtool::StartIfEnabled(); }
