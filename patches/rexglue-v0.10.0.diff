@@ -268,7 +268,7 @@ index 813bb1c..386c5a2 100644
      if (!any) {
        merged = state;
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
-index 3f9422d..e77cef6 100644
+index 3f9422d..9f2afb5 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
 +++ b/src/input/mnk/mnk_input_driver.cpp
 @@ -18,15 +18,20 @@
@@ -426,7 +426,33 @@ index 3f9422d..e77cef6 100644
      double sensitivity = REXCVAR_GET(mnk_sensitivity);
      constexpr double kBaseScale = 200.0;
      rx += static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale);
-@@ -541,13 +620,21 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
+@@ -349,6 +428,15 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+ 
+   packet_number_++;
+ 
++  {  // DIAG (temporary)
++    static uint16_t last_buttons = 0;
++    static uint8_t last_lt = 0, last_rt = 0;
++    if (buttons != last_buttons || lt != last_lt || rt != last_rt) {
++      REXLOG_INFO("DIAG mnk state buttons={:#06x} lt={} rt={} shift={} ctrl={} lmb={} rmb={}",
++                  buttons, lt, rt, key_down_[0x10], key_down_[0x11], key_down_[0x01], key_down_[0x02]);
++      last_buttons = buttons; last_lt = lt; last_rt = rt;
++    }
++  }
+   if (out_state) {
+     out_state->packet_number = packet_number_;
+     out_state->gamepad.buttons = buttons;
+@@ -475,6 +563,9 @@ void MnkInputDriver::RecenterCursorFromUIThread(int32_t x, int32_t y) {
+ }
+ 
+ void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
++  if (vk < 256 && key_down_[vk] != down)  // DIAG (temporary)
++    REXLOG_INFO("DIAG mnk key vk={:#04x} {} enabled={} focus={}", vk, down ? "down" : "up",
++                IsEnabled(), bool(has_focus_));
+   if (vk < 256) {
+     key_down_[vk] = down;
+   }
+@@ -541,13 +632,21 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
    int32_t y = e.y();
    {
      std::lock_guard lock(state_mutex_);
@@ -452,8 +478,37 @@ index 3f9422d..e77cef6 100644
      }
    }
    prev_mouse_x_ = x;
+diff --git a/src/ui/d3d12/d3d12_presenter.cpp b/src/ui/d3d12/d3d12_presenter.cpp
+index 306118e..7b92fef 100644
+--- a/src/ui/d3d12/d3d12_presenter.cpp
++++ b/src/ui/d3d12/d3d12_presenter.cpp
+@@ -20,6 +20,8 @@
+ #include <rex/logging.h>
+ #include <rex/math.h>
+ #include <rex/ui/d3d12/d3d12_presenter.h>
++#include <rex/perf/counter.h>
++#include <rex/chrono/clock.h>
+ #include <rex/ui/d3d12/d3d12_provider.h>
+ #include <rex/ui/d3d12/d3d12_util.h>
+ #include <rex/ui/surface_win.h>
+@@ -1158,6 +1160,15 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
+   HRESULT present_result = paint_context_.swap_chain->Present(
+       0, DXGI_PRESENT_RESTART |
+              (paint_context_.swap_chain_allows_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0));
++  {  // wet-recomp patch: host interval between presents, for the perf CSV.
++    static uint64_t last_present_tick = 0;
++    uint64_t now = rex::chrono::Clock::QueryHostTickCount();
++    if (last_present_tick) {
++      PERF_counter_set(kPresentIntervalUs, int64_t((now - last_present_tick) * 1000000 /
++                                                  rex::chrono::Clock::QueryHostTickFrequency()));
++    }
++    last_present_tick = now;
++  }
+   // Even if presentation has failed, work might have been enqueued anyway
+   // internally before the failure according to Jesse Natalie from the DirectX
+   // Discord server.
 diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
-index 7360ed9..326bed3 100644
+index 7360ed9..51a5f95 100644
 --- a/src/ui/presenter.cpp
 +++ b/src/ui/presenter.cpp
 @@ -15,11 +15,16 @@
@@ -473,7 +528,7 @@ index 7360ed9..326bed3 100644
  
  #if defined(REX_HAS_FIDELITYFX_RUNTIME) && REX_HAS_FIDELITYFX_RUNTIME
  #include <ffx_api/ffx_api.h>
-@@ -277,6 +282,62 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
+@@ -277,6 +282,59 @@ GuestOutputPaintConfig BuildGuestOutputPaintConfigFromCVar() {
  namespace rex {
  namespace ui {
  
@@ -524,10 +579,7 @@ index 7360ed9..326bed3 100644
 +    }
 +    next_deadline += period;
 +  }
-+  if (last_present) {
-+    PERF_counter_set(kPresentIntervalUs, int64_t((now - last_present) * 1000000 / freq));
-+  }
-+  last_present = now;
++  (void)last_present;
 +}
 +
 +}  // namespace
@@ -536,14 +588,16 @@ index 7360ed9..326bed3 100644
  void Presenter::FatalErrorHostGpuLossCallback([[maybe_unused]] bool is_responsible,
                                                [[maybe_unused]] bool statically_from_ui_thread) {
    rex::FatalError("Graphics device lost (probably due to an internal error)");
-@@ -628,6 +689,7 @@ bool Presenter::RefreshGuestOutput(
-       case PaintMode::kGuestOutputThreadImmediately:
-         // Both painting and window paint requesting are accessible.
-         if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedPaintable) {
-+          PaceGuestPresent();  // wet-recomp patch
-           paint_result = PaintAndPresent(false);
-           if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedOutdated) {
-             RequestPaintOrConnectionRecoveryViaWindow(true);
+@@ -614,6 +672,9 @@ bool Presenter::RefreshGuestOutput(
+   }
+ 
+   // Trigger the presentation on the host.
++  // wet-recomp patch: hold the finished frame until the next period boundary before
++  // publishing it, whichever thread ends up presenting it.
++  PaceGuestPresent();
+   PaintResult paint_result = PaintResult::kNotPresented;
+   {
+     std::lock_guard<std::mutex> paint_mode_mutex_lock(paint_mode_mutex_);
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
 index f102b56..ba610bb 100644
 --- a/thirdparty/CMakeLists.txt
