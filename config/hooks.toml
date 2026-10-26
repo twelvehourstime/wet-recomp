@@ -38,3 +38,12 @@ registers = ["r1"]
 name = "WetMouseLookMirror80Hook"
 address = 0x82894D2C
 registers = ["r1"]
+
+# Aim assist (sub_829B1960, camera update): if params+344 is set and the aim is within 0.01 rad
+# of the target, the yaw/pitch limits become ~0 and the camera freezes on the target. A stick
+# breaks out by pushing; per-frame mouse values never do. Hook before `cmplwi cr6,r7,0`:
+# r7 = 0 (flag clear) while the mouse is being used, unless wet_mouse_aim_assist is on.
+[[midasm_hook]]
+name = "WetAimAssistHook"
+address = 0x829B19B0
+registers = ["r7"]

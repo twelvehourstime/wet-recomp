@@ -16,6 +16,7 @@
 // Writing the camera angles directly does not work: with a zero stick the camera's auto-follow
 // re-derives the angles every frame and discards the change.
 
+#include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/ppc/context.h>
@@ -32,6 +33,8 @@ REXCVAR_DEFINE_DOUBLE(wet_mouse_sensitivity, 0.05, "Wet/Input",
                       "Camera degrees per mouse count")
     .range(0.001, 2.0);
 REXCVAR_DEFINE_BOOL(wet_mouse_invert_y, false, "Wet/Input", "Invert mouse vertical look");
+REXCVAR_DEFINE_BOOL(wet_mouse_aim_assist, false, "Wet/Input",
+                    "Keep the game's aim assist (camera lock near targets) while using the mouse");
 
 namespace {
 
@@ -47,6 +50,9 @@ constexpr uint32_t kPitchSpeed = 92;
 // Stick value computed by the snapshot hook this frame, re-applied by the mirror hooks.
 std::atomic<float> g_add_x{0.0f};
 std::atomic<float> g_add_y{0.0f};
+// Host tick of the last non-zero mouse motion; the mouse counts as "in use" for a while after.
+std::atomic<uint64_t> g_last_mouse_tick{0};
+constexpr double kMouseInUseSeconds = 1.0;
 
 uint32_t LoadU32(uint8_t* base, uint32_t addr) {
   uint32_t v;
@@ -86,6 +92,7 @@ void WetMouseLookHook(PPCRegister& r29) {
   g_add_x.store(0.0f, std::memory_order_relaxed);
   g_add_y.store(0.0f, std::memory_order_relaxed);
   if (!REXCVAR_GET(wet_raw_mouse) || dt > kStaleSeconds || (dx == 0 && dy == 0)) return;
+  g_last_mouse_tick.store(rex::chrono::Clock::QueryHostTickCount(), std::memory_order_relaxed);
 
   uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
   const uint32_t player = r29.u32;
@@ -112,3 +119,12 @@ void WetMouseLookHook(PPCRegister& r29) {
 void WetMouseLookMirror96Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 96); }
 void WetMouseLookMirror88Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 88); }
 void WetMouseLookMirror80Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 80); }
+
+void WetAimAssistHook(PPCRegister& r7) {
+  if (REXCVAR_GET(wet_mouse_aim_assist) || !REXCVAR_GET(wet_raw_mouse)) return;
+  uint64_t last = g_last_mouse_tick.load(std::memory_order_relaxed);
+  if (!last) return;
+  double idle = double(rex::chrono::Clock::QueryHostTickCount() - last) /
+                double(rex::chrono::Clock::QueryHostTickFrequency());
+  if (idle < kMouseInUseSeconds) r7.u64 = 0;  // flag clear: skip the aim lock
+}
