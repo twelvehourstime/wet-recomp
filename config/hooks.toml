@@ -60,3 +60,20 @@ registers = ["r7"]
 name = "WetCameraFollowHook"
 address = 0x829AEECC
 registers = ["f12"]
+
+# Mouse-only camera orbit (sub_829BA128, the camera controller update). While the character
+# moves, the game's update rotates the boom (cam+80, camera position relative to the target)
+# with the character's heading, which a mouse cannot counter. With wet_camera_follow off:
+#   0x829BA328 (before the angle derivation): remember the boom the frame started with (v55).
+#   0x829BA8C0 (final `stvx128 v126,r0,r28`): replace the game's new boom with the remembered
+#   direction rotated only by this frame's mouse motion, keeping the game's new length (camera
+#   collision). The mouse is applied here too, so it is not applied twice.
+[[midasm_hook]]
+name = "WetCameraBoomHook"
+address = 0x829BA328
+registers = ["r31", "v55"]
+
+[[midasm_hook]]
+name = "WetCameraBoomStoreHook"
+address = 0x829BA8C0
+registers = ["r31", "v126"]

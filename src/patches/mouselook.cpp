@@ -58,6 +58,12 @@ std::atomic<float> g_add_x{0.0f};
 std::atomic<float> g_add_y{0.0f};
 // Host tick of the last non-zero mouse motion; the mouse counts as "in use" for a while after.
 std::atomic<uint64_t> g_last_mouse_tick{0};
+// This frame's mouse motion in radians (yaw: + = right, pitch: + = up), for the orbit hook.
+std::atomic<float> g_mouse_yaw_rad{0.0f};
+std::atomic<float> g_mouse_pitch_rad{0.0f};
+// Boom (camera position relative to target) at the start of the current camera update.
+float g_prev_boom[3] = {0.0f, 0.0f, 0.0f};
+bool g_prev_boom_valid = false;
 constexpr double kMouseInUseSeconds = 1.0;
 
 uint32_t LoadU32(uint8_t* base, uint32_t addr) {
@@ -97,6 +103,8 @@ void WetMouseLookHook(PPCRegister& r29) {
   rex::input::mnk::TakeRawMouseDelta(dx, dy, dt);
   g_add_x.store(0.0f, std::memory_order_relaxed);
   g_add_y.store(0.0f, std::memory_order_relaxed);
+  g_mouse_yaw_rad.store(0.0f, std::memory_order_relaxed);
+  g_mouse_pitch_rad.store(0.0f, std::memory_order_relaxed);
   if (!REXCVAR_GET(wet_raw_mouse) || dt > kStaleSeconds || (dx == 0 && dy == 0)) return;
   g_last_mouse_tick.store(rex::chrono::Clock::QueryHostTickCount(), std::memory_order_relaxed);
 
@@ -115,6 +123,8 @@ void WetMouseLookHook(PPCRegister& r29) {
   const double up = REXCVAR_GET(wet_mouse_invert_y) ? -double(dy) : double(dy);
   const float add_x = float(-dx * rad_per_count / (dt * yaw_speed));
   const float add_y = float(up * rad_per_count / (dt * pitch_speed));
+  g_mouse_yaw_rad.store(float(dx * rad_per_count), std::memory_order_relaxed);
+  g_mouse_pitch_rad.store(float(-up * rad_per_count), std::memory_order_relaxed);
 
   g_add_x.store(add_x, std::memory_order_relaxed);
   g_add_y.store(add_y, std::memory_order_relaxed);
@@ -151,7 +161,43 @@ void WetMouseLookMirror80Hook(PPCRegister& r1, PPCRegister& r28) {
 
 void WetCameraFollowHook(PPCRegister& f12) {
   if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse)) return;
-  uint64_t last = g_last_mouse_tick.load(std::memory_order_relaxed);
-  if (!last) return;  // mouse never used this session: leave the game's behaviour alone
-  f12.f64 = -1.0;     // "timer below threshold": world basis
+  f12.f64 = -1.0;  // "timer below threshold": world basis
+}
+
+
+
+// --- Mouse-only camera orbit (see config/hooks.toml) ---
+
+void WetCameraBoomHook(PPCRegister& r31, PPCVRegister& v55) {
+  (void)r31;
+  g_prev_boom[0] = v55.f32[0];
+  g_prev_boom[1] = v55.f32[1];
+  g_prev_boom[2] = v55.f32[2];
+  g_prev_boom_valid = std::fabs(v55.f32[0]) + std::fabs(v55.f32[2]) > 1e-3f;
+}
+
+void WetCameraBoomStoreHook(PPCRegister& r31, PPCVRegister& v126) {
+  (void)r31;
+  if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse) || !g_prev_boom_valid) return;
+  if (!g_last_mouse_tick.load(std::memory_order_relaxed)) return;  // mouse never used
+
+  const float new_len = std::sqrt(v126.f32[0] * v126.f32[0] + v126.f32[1] * v126.f32[1] +
+                                  v126.f32[2] * v126.f32[2]);
+  if (new_len < 1e-3f) return;
+
+  // Previous boom in yaw/elevation form.
+  float px = g_prev_boom[0], py = g_prev_boom[1], pz = g_prev_boom[2];
+  float horiz = std::sqrt(px * px + pz * pz);
+  float yaw = std::atan2(pz, px);
+  float elev = std::atan2(py, horiz);
+
+  // Apply only this frame's mouse motion. Signs verified in game (adjust here if reversed).
+  yaw += g_mouse_yaw_rad.load(std::memory_order_relaxed);
+  elev += g_mouse_pitch_rad.load(std::memory_order_relaxed);
+  elev = std::clamp(elev, -1.10f, 0.85f);  // roughly the game's own pitch limits
+
+  const float c = std::cos(elev);
+  v126.f32[0] = new_len * c * std::cos(yaw);
+  v126.f32[1] = new_len * std::sin(elev);
+  v126.f32[2] = new_len * c * std::sin(yaw);
 }
