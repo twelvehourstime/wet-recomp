@@ -11,8 +11,30 @@ registers = ["r11"]
 # run through sub_829A64B8 (dead zone/curve); 0x829B812C is the join point either way.
 # The camera (sub_829B1960 -> sub_829AB470) turns by dt * speed * stick and other code uses a
 # non-zero stick to stop auto-follow, so mouse motion is injected here as the exact stick value
-# that turns the camera by the mouse angle. r29 = player.
+# that turns the camera by the mouse angle. r29 = player. This hook also computes the per-frame
+# value the mirror hooks below re-use.
 [[midasm_hook]]
 name = "WetMouseLookHook"
 address = 0x829B812C
 registers = ["r29"]
+
+# Lock-on / slow-motion aim paths read the right stick themselves (GetRightStick into a stack
+# vec2, then sub_829A64B8) instead of using the snapshot, so the mouse must be added there too,
+# right after their processing call returns:
+#   sub_8290F660: vec at r1+96 (0x8290F908 call) and, second site, r1+88 (0x8290FC8C call)
+#   sub_82894A40: vec at r1+80 (0x82894D28 call); non-zero here means "player is steering",
+#                 which is what releases the auto-lock camera.
+[[midasm_hook]]
+name = "WetMouseLookMirror96Hook"
+address = 0x8290F90C
+registers = ["r1"]
+
+[[midasm_hook]]
+name = "WetMouseLookMirror88Hook"
+address = 0x8290FC90
+registers = ["r1"]
+
+[[midasm_hook]]
+name = "WetMouseLookMirror80Hook"
+address = 0x82894D2C
+registers = ["r1"]

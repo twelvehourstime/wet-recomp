@@ -8,7 +8,12 @@
 //   so:       stick += mouse_radians / (dt * speed)
 // Controllers keep working (their stick value is kept and the mouse is added on top).
 //
-// Writing the angles directly does not work: with a zero stick the camera's auto-follow
+// The lock-on / slow-motion aim code reads the right stick through its own calls instead of
+// the snapshot, so the same per-frame value is mirrored into those readers' vectors
+// (config/hooks.toml). Without that the game believes the stick is idle and keeps the
+// auto-lock camera, which showed up as "mouse dead while the red marker is on an enemy".
+//
+// Writing the camera angles directly does not work: with a zero stick the camera's auto-follow
 // re-derives the angles every frame and discards the change.
 
 #include <rex/cvar.h>
@@ -17,6 +22,7 @@
 #include <rex/system/kernel_state.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 
@@ -38,6 +44,10 @@ constexpr uint32_t kCameraParams = 500;  // pointer; +80 yaw speed, +92 pitch sp
 constexpr uint32_t kYawSpeed = 80;
 constexpr uint32_t kPitchSpeed = 92;
 
+// Stick value computed by the snapshot hook this frame, re-applied by the mirror hooks.
+std::atomic<float> g_add_x{0.0f};
+std::atomic<float> g_add_y{0.0f};
+
 uint32_t LoadU32(uint8_t* base, uint32_t addr) {
   uint32_t v;
   std::memcpy(&v, base + addr, 4);
@@ -58,12 +68,23 @@ void StoreF32(uint8_t* base, uint32_t addr, float f) {
   std::memcpy(base + addr, &v, 4);
 }
 
+void AddToVec2(uint32_t addr) {
+  float ax = g_add_x.load(std::memory_order_relaxed);
+  float ay = g_add_y.load(std::memory_order_relaxed);
+  if (ax == 0.0f && ay == 0.0f) return;
+  uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
+  StoreF32(base, addr, LoadF32(base, addr) + ax);
+  StoreF32(base, addr + 4, LoadF32(base, addr + 4) + ay);
+}
+
 }  // namespace
 
 void WetMouseLookHook(PPCRegister& r29) {
   float dx = 0, dy = 0;
   double dt = 0;
   rex::input::mnk::TakeRawMouseDelta(dx, dy, dt);
+  g_add_x.store(0.0f, std::memory_order_relaxed);
+  g_add_y.store(0.0f, std::memory_order_relaxed);
   if (!REXCVAR_GET(wet_raw_mouse) || dt > kStaleSeconds || (dx == 0 && dy == 0)) return;
 
   uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
@@ -82,6 +103,12 @@ void WetMouseLookHook(PPCRegister& r29) {
   const float add_x = float(-dx * rad_per_count / (dt * yaw_speed));
   const float add_y = float(up * rad_per_count / (dt * pitch_speed));
 
+  g_add_x.store(add_x, std::memory_order_relaxed);
+  g_add_y.store(add_y, std::memory_order_relaxed);
   StoreF32(base, player + kRightStickX, LoadF32(base, player + kRightStickX) + add_x);
   StoreF32(base, player + kRightStickY, LoadF32(base, player + kRightStickY) + add_y);
 }
+
+void WetMouseLookMirror96Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 96); }
+void WetMouseLookMirror88Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 88); }
+void WetMouseLookMirror80Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 80); }
