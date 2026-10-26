@@ -42,12 +42,14 @@ name = "WetMouseLookMirror80Hook"
 address = 0x82894D2C
 registers = ["r1", "r28"]
 
-# Aim assist (sub_829B1960, camera update): if params+344 is set and the aim is within 0.01 rad
-# of the target, the yaw/pitch limits become ~0 and the camera freezes on the target. A stick
-# breaks out by pushing; per-frame mouse values never do. Hook before `cmplwi cr6,r7,0`:
-# r7 = 0 (flag clear) while the mouse is being used, unless wet_mouse_aim_assist is on.
+# Camera target-lock branch (sub_829B1960, camera update): if params+344 is set and the camera
+# is within a threshold of the target angles (params+352/+364), the yaw/pitch limits are replaced
+# so the camera locks onto them. While the character moves this is the camera follow (the
+# target is the character's heading); a stick breaks out by pushing, per-frame mouse values
+# never do. Hook before `cmplwi cr6,r7,0`: r7 = 0 (flag clear) whenever raw mouse mode is on
+# and wet_camera_follow is off.
 [[midasm_hook]]
-name = "WetAimAssistHook"
+name = "WetCameraLockHook"
 address = 0x829B19B0
 registers = ["r7"]
 
@@ -60,20 +62,3 @@ registers = ["r7"]
 name = "WetCameraFollowHook"
 address = 0x829AEECC
 registers = ["f12"]
-
-# Mouse-only camera orbit (sub_829BA128, the camera controller update). While the character
-# moves, the game's update rotates the boom (cam+80, camera position relative to the target)
-# with the character's heading, which a mouse cannot counter. With wet_camera_follow off:
-#   0x829BA328 (before the angle derivation): remember the boom the frame started with (v55).
-#   0x829BA8C0 (final `stvx128 v126,r0,r28`): replace the game's new boom with the remembered
-#   direction rotated only by this frame's mouse motion, keeping the game's new length (camera
-#   collision). The mouse is applied here too, so it is not applied twice.
-[[midasm_hook]]
-name = "WetCameraBoomHook"
-address = 0x829BA328
-registers = ["r31", "v55"]
-
-[[midasm_hook]]
-name = "WetCameraBoomStoreHook"
-address = 0x829BA8C0
-registers = ["r31", "v126"]
