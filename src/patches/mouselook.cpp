@@ -127,3 +127,21 @@ void WetAimAssistHook(PPCRegister& r7) {
                 double(rex::chrono::Clock::QueryHostTickFrequency());
   if (idle < kMouseInUseSeconds) r7.u64 = 0;  // flag clear: skip the aim lock
 }
+
+void WetMouseLookMirror96Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 96); }
+void WetMouseLookMirror88Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 88); }
+
+void WetMouseLookMirror80Hook(PPCRegister& r1, PPCRegister& r28) {
+  AddToVec2(r1.u32 + 80);
+  if (!REXCVAR_GET(wet_aim_assist) && r28.u32) {
+    // WeaponArmManager+316 bit 0x800000: aim assist enabled (IsAimAssistEnabled).
+    uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
+    const uint32_t flags_addr = r28.u32 + 316;
+    uint32_t flags = LoadU32(base, flags_addr);
+    if (flags & 0x800000u) {
+      flags &= ~0x800000u;
+      uint32_t be = _byteswap_ulong(flags);
+      std::memcpy(base + flags_addr, &be, 4);
+    }
+  }
+}
