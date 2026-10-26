@@ -289,3 +289,49 @@ Open items:
 - Proper KB/M default layout once the user knows all actions (action names now in the menu).
 - Cleanup: remove the unused SDK mouse diag leftovers if any; consider Release build later.
 - Process: never taskkill the game inside a build command without asking (happened once).
+
+## Session 2026-10-26: frame pacing, controls save, lock-on mouse, aim assist, camera
+- Frame rate: SDK patches 6-8 (perf counters, no wait on async pipeline creation, present
+  pacing at the publish point). Busy scenes >~1600 draw calls still drop (~9 us/draw of
+  translation cost); cp_thread_cpu_us is logged (logs/perf-play9.csv) but not analyzed yet.
+- Controls save: SDK SaveConfig only wrote launch flags -> explicit ControlsMenu::Save() writes
+  all input cvars + non-default runtime/config cvars to wet.toml. Menu exists only while open
+  (a permanent dialog made the SDK present ~4000 times/s).
+- Lock-on / slow-mo mouse drop: the aim paths read the right stick through their own calls, so
+  the per-frame mouse stick value is mirrored into their stack vectors (Mirror96/88/80 hooks).
+- Aim assist: WeaponArmManager+316 bit 0x800000 (IsAimAssistEnabled) cleared every frame while
+  wet_aim_assist is off (user prefers it fully gone; the in-game option is overridden).
+
+### Camera orbit while strafing (open areas) - FIXED, user-verified 2026-10-26 05:10
+Symptom: walking left/right with the mouse still rotated the camera around the character; the
+mouse had to counteract it. Four earlier hooks (lock branch, basis timer, moving block, orbit
+replacement) did nothing because the rotation is not in any camera controller.
+Method that worked: memtool watchpoint (cam+432..+496) named the only writer of the stored
+yaw (the camera update's own final store), then four temporary hooks logged yaw at each stage
+of sub_829BA128 (after boom->angles, after sub_829B9490, after sub_829B1960, at the store) with
+the basis rows and the boom. Result: yaw was identical through every stage; the boom already
+pointed elsewhere at the start of the next frame. Two causes:
+1. sub_829AEE68 builds the basis the angles live in from the character's transform (both
+   branches; there is no world-basis branch), so the basis turns with the heading and the
+   stored, basis-relative angle is smoothed into a rotated basis.
+   -> WetCameraBasisFlagHook (0x829AEEB8, r10=0) + WetCameraFollowHook (0x829AEECC, f12 huge,
+   rewrite rotation rows of the copied transform with the identity): world-relative angles.
+2. Trailing camera: cam+192 is the smoothed target position (sub_829A7F68 lerp at params+560
+   rates); at frame start the update subtracts this frame's target movement from the boom
+   (v126 = new - old cam+192; v1 = boom - v126 at 0x829BA328) before boom->angles, i.e. the
+   camera stays where it was in the world and the boom swings behind the motion.
+   -> WetCameraTrailHook (0x829BA328, v126 = 0): the boom direction persists frame to frame.
+Both gated on wet_raw_mouse && !wet_camera_follow. The log after the fix shows yaw flat during
+the whole strafe and changing only with mouse input.
+Camera update structure (sub_829BA128), for later: control snapshot sub_829B8078; timer
+cam+464; basis r1+144 (sub_829AEE68); smoothed offsets cam+192/+208 (sub_829A7F68); boom
+cam+80 -> angles r1+112/116/120 (sub_829AB1A8, yaw not reloaded from +476 since params+652 is
+0, pitch reloaded from +480 since params+644 is set); controllers chosen by params flags and
+sub_828ED770 checks: sub_829B8A68, sub_829B90A8, sub_829B8D28, sub_829B9490 (open area, then
+sub_829B1960 stick camera on top), sub_829B1960 (integrator sub_829AB470 angle += dt*speed*
+stick via sub_829A8168 clamp); angles -> boom (sub_829A8078), stored to +476/+480/+484 and
+cam+80 at 0x829BA898..8C0. Address listing of a generated function: count the '// ' comment
+lines from the function start (labels verify the count); scratch script /tmp/addr.py did this.
+- memtool watch gotcha: ExceptionInformation[1] is the faulting address, so a 16-byte vector
+  store starting below the watched range is missed; watch a wider range. The handler logs each
+  unique rip once.

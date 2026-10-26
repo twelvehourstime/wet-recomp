@@ -53,15 +53,34 @@ name = "WetCameraLockHook"
 address = 0x829B19B0
 registers = ["r7"]
 
-# Camera follow (sub_829AEE68): the camera update derives its angles in a basis copied from the
-# target entity's transform (so the camera turns with the character's heading) unless the timer
-# at camera+464 is below params+772, which selects a world basis instead. Hook before
-# `fcmpu cr6,f12,f13` (f12 = timer): while the mouse is in use and wet_camera_follow is off,
-# f12 = -1 so the world basis is always used and the camera stays where the mouse put it.
+# Camera basis (sub_829AEE68): the camera's yaw/pitch are expressed in a basis built from the
+# character's transform (copied as-is, or with a fixed offset rotation multiplied in), so the
+# basis turns with the heading while the angles are smoothed toward last frame's stored
+# values, which orbits the camera around the character as it strafes. While raw mouse mode is
+# on and wet_camera_follow is off: r10 = 0 (params+764 clear) so the timer compare runs,
+# then f12 = huge so the function returns right after the copy, and the hook rewrites the
+# copied rotation rows (r30 = output matrix) with the identity: world-relative angles.
+[[midasm_hook]]
+name = "WetCameraBasisFlagHook"
+address = 0x829AEEB8
+registers = ["r10"]
+
 [[midasm_hook]]
 name = "WetCameraFollowHook"
 address = 0x829AEECC
-registers = ["f12"]
+registers = ["f12", "r30"]
+
+# Trailing camera (sub_829BA128): cam+192 is the smoothed target position; each frame the
+# update subtracts the target's movement from the boom vector (v126 = new - old cam+192,
+# then v1 = boom - v126) before converting the boom to angles, so the camera's world position
+# stays put while the character walks away and the boom swings round behind the movement
+# (strafing orbits the camera). Hook before `vsubfp128 v1,v55,v126`: v126 = 0 while raw mouse
+# mode is on and wet_camera_follow is off, so the boom direction persists and the camera is
+# carried with the character at the angle the mouse set.
+[[midasm_hook]]
+name = "WetCameraTrailHook"
+address = 0x829BA328
+registers = ["v126"]
 
 # Follow camera (sub_829B9490, the camera used in open areas): while the camera's "moving" flag
 # (flags160 bit 0) is set, the block at 0x829B95BC drives yaw and pitch toward target angles

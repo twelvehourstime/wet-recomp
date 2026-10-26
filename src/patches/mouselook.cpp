@@ -144,9 +144,29 @@ void WetMouseLookMirror80Hook(PPCRegister& r1, PPCRegister& r28) {
   }
 }
 
-void WetCameraFollowHook(PPCRegister& f12) {
+void WetCameraBasisFlagHook(PPCRegister& r10) {
   if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse)) return;
-  f12.f64 = -1.0;  // "timer below threshold": world basis
+  r10.u64 = 0;  // params+764 "clear": take the timer compare below
+}
+
+void WetCameraFollowHook(PPCRegister& f12, PPCRegister& r30) {
+  if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse)) return;
+  f12.f64 = 1.0e9;  // timer "above threshold": return with the copied transform
+  // The copy is the character's transform; replace its rotation rows (0..2) with the identity
+  // so the camera angles are world-relative and no longer turn with the heading. Row 3
+  // (position) is kept.
+  uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
+  const uint32_t out = r30.u32;
+  for (uint32_t row = 0; row < 3; ++row) {
+    for (uint32_t col = 0; col < 4; ++col) {
+      StoreF32(base, out + row * 16 + col * 4, row == col ? 1.0f : 0.0f);
+    }
+  }
+}
+
+void WetCameraTrailHook(PPCVRegister& v126) {
+  if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse)) return;
+  for (float& f : v126.f32) f = 0.0f;  // target moved by nothing: the boom direction persists
 }
 
 void WetCameraFollowMoveHook(PPCRegister& r10) {
