@@ -35,6 +35,9 @@ REXCVAR_DEFINE_DOUBLE(wet_mouse_sensitivity, 0.05, "Wet/Input",
 REXCVAR_DEFINE_BOOL(wet_mouse_invert_y, false, "Wet/Input", "Invert mouse vertical look");
 REXCVAR_DEFINE_BOOL(wet_mouse_aim_assist, false, "Wet/Input",
                     "Keep the game's aim-lock branch in the camera update while using the mouse");
+REXCVAR_DEFINE_BOOL(wet_camera_follow, false, "Wet/Input",
+                    "Let the camera turn with the character's heading while moving (game "
+                    "default). Off keeps the camera where the mouse put it");
 REXCVAR_DEFINE_BOOL(wet_aim_assist, false, "Wet/Input",
                     "Game aim assist (sticky reticle / target magnetism). Off clears the "
                     "WeaponArmManager aim-assist flag every frame, overriding the in-game option");
@@ -144,4 +147,11 @@ void WetMouseLookMirror80Hook(PPCRegister& r1, PPCRegister& r28) {
       std::memcpy(base + flags_addr, &be, 4);
     }
   }
+}
+
+void WetCameraFollowHook(PPCRegister& f12) {
+  if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse)) return;
+  uint64_t last = g_last_mouse_tick.load(std::memory_order_relaxed);
+  if (!last) return;  // mouse never used this session: leave the game's behaviour alone
+  f12.f64 = -1.0;     // "timer below threshold": world basis
 }

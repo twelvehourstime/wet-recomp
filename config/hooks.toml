@@ -50,3 +50,13 @@ registers = ["r1", "r28"]
 name = "WetAimAssistHook"
 address = 0x829B19B0
 registers = ["r7"]
+
+# Camera follow (sub_829AEE68): the camera update derives its angles in a basis copied from the
+# target entity's transform (so the camera turns with the character's heading) unless the timer
+# at camera+464 is below params+772, which selects a world basis instead. Hook before
+# `fcmpu cr6,f12,f13` (f12 = timer): while the mouse is in use and wet_camera_follow is off,
+# f12 = -1 so the world basis is always used and the camera stays where the mouse put it.
+[[midasm_hook]]
+name = "WetCameraFollowHook"
+address = 0x829AEECC
+registers = ["f12"]
