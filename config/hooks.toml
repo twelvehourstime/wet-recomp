@@ -34,10 +34,13 @@ name = "WetMouseLookMirror88Hook"
 address = 0x8290FC90
 registers = ["r1"]
 
+# r28 = WeaponArmManager: its +316 flags word holds bit 0x800000 = aim assist enabled (what
+# WeaponArmManager::IsAimAssistEnabled returns, set from the Options value); the hook also
+# clears it every frame while wet_aim_assist is off.
 [[midasm_hook]]
 name = "WetMouseLookMirror80Hook"
 address = 0x82894D2C
-registers = ["r1"]
+registers = ["r1", "r28"]
 
 # Aim assist (sub_829B1960, camera update): if params+344 is set and the aim is within 0.01 rad
 # of the target, the yaw/pitch limits become ~0 and the camera freezes on the target. A stick

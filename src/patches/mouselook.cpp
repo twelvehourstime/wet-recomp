@@ -34,7 +34,10 @@ REXCVAR_DEFINE_DOUBLE(wet_mouse_sensitivity, 0.05, "Wet/Input",
     .range(0.001, 2.0);
 REXCVAR_DEFINE_BOOL(wet_mouse_invert_y, false, "Wet/Input", "Invert mouse vertical look");
 REXCVAR_DEFINE_BOOL(wet_mouse_aim_assist, false, "Wet/Input",
-                    "Keep the game's aim assist (camera lock near targets) while using the mouse");
+                    "Keep the game's aim-lock branch in the camera update while using the mouse");
+REXCVAR_DEFINE_BOOL(wet_aim_assist, false, "Wet/Input",
+                    "Game aim assist (sticky reticle / target magnetism). Off clears the "
+                    "WeaponArmManager aim-assist flag every frame, overriding the in-game option");
 
 namespace {
 
@@ -115,10 +118,6 @@ void WetMouseLookHook(PPCRegister& r29) {
   StoreF32(base, player + kRightStickX, LoadF32(base, player + kRightStickX) + add_x);
   StoreF32(base, player + kRightStickY, LoadF32(base, player + kRightStickY) + add_y);
 }
-
-void WetMouseLookMirror96Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 96); }
-void WetMouseLookMirror88Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 88); }
-void WetMouseLookMirror80Hook(PPCRegister& r1) { AddToVec2(r1.u32 + 80); }
 
 void WetAimAssistHook(PPCRegister& r7) {
   if (REXCVAR_GET(wet_mouse_aim_assist) || !REXCVAR_GET(wet_raw_mouse)) return;
