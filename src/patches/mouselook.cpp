@@ -148,3 +148,8 @@ void WetCameraFollowHook(PPCRegister& f12) {
   if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse)) return;
   f12.f64 = -1.0;  // "timer below threshold": world basis
 }
+
+void WetCameraFollowMoveHook(PPCRegister& r10) {
+  if (REXCVAR_GET(wet_camera_follow) || !REXCVAR_GET(wet_raw_mouse)) return;
+  r10.u64 = 0;  // "not moving": skip the yaw/pitch approach toward the heading targets
+}

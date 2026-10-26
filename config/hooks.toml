@@ -62,3 +62,14 @@ registers = ["r7"]
 name = "WetCameraFollowHook"
 address = 0x829AEECC
 registers = ["f12"]
+
+# Follow camera (sub_829B9490, the camera used in open areas): while the camera's "moving" flag
+# (flags160 bit 0) is set, the block at 0x829B95BC drives yaw and pitch toward target angles
+# from the camera parameters (sub_829A3E10 "approach at rate"), which turns the camera with the
+# character. Hook before `cmplwi cr6,r10,0` (r10 = that flag bit): r10 = 0 while mouse mode is
+# on and wet_camera_follow is off, so the block is skipped and the camera stays where the mouse
+# put it. Stick/mouse input and the distance logic later in the function are untouched.
+[[midasm_hook]]
+name = "WetCameraFollowMoveHook"
+address = 0x829B95C4
+registers = ["r10"]
