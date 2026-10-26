@@ -52,9 +52,16 @@ class WetApp : public rex::ReXApp {
 
   // Controls menu (keyboard/mouse and controller bindings), toggled with F1.
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
-    controls_menu_ = std::make_unique<wet::ui::ControlsMenu>(drawer, config_path_);
-    rex::ui::RegisterBind("bind_wet_controls", "F1", "Toggle Wet controls menu",
-                          [this] { controls_menu_->Toggle(); });
+    controls_drawer_ = drawer;
+    rex::ui::RegisterBind("bind_wet_controls", "F1", "Toggle Wet controls menu", [this] {
+      if (controls_menu_) {
+        controls_menu_->RequestClose();
+      } else {
+        // Owned by the drawer; it deletes itself after closing and clears the pointer.
+        controls_menu_ = new wet::ui::ControlsMenu(controls_drawer_, config_path_,
+                                                   [this] { controls_menu_ = nullptr; });
+      }
+    });
   }
 
   // Override virtual hooks for customization:
@@ -67,5 +74,6 @@ class WetApp : public rex::ReXApp {
 
  private:
   std::filesystem::path config_path_;
-  std::unique_ptr<wet::ui::ControlsMenu> controls_menu_;
+  rex::ui::ImGuiDrawer* controls_drawer_ = nullptr;
+  wet::ui::ControlsMenu* controls_menu_ = nullptr;  // non-owning, see OnCreateDialogs
 };

@@ -135,12 +135,18 @@ void ActionNameField(const char* pad_id) {
 
 }  // namespace
 
-ControlsMenu::ControlsMenu(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path)
-    : ImGuiDialog(drawer), config_path_(std::move(config_path)) {}
+ControlsMenu::ControlsMenu(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path,
+                           std::function<void()> on_closed)
+    : ImGuiDialog(drawer), config_path_(std::move(config_path)), on_closed_(std::move(on_closed)) {
+  SetVisible(true);
+}
 
 ControlsMenu::~ControlsMenu() { SetVisible(false); }
 
-void ControlsMenu::Toggle() { SetVisible(!visible_); }
+void ControlsMenu::OnClose() {
+  SetVisible(false);
+  if (on_closed_) on_closed_();
+}
 
 void ControlsMenu::SetVisible(bool visible) {
   if (visible == visible_) return;
@@ -379,7 +385,6 @@ void ControlsMenu::Save() {
 }
 
 void ControlsMenu::OnDraw(ImGuiIO& /*io*/) {
-  if (!visible_) return;
   if (capture_ == Capture::kKeyReplace || capture_ == Capture::kKeyAdd) PollKeyCapture();
   if (capture_ == Capture::kPad) PollPadCapture();
 
@@ -416,7 +421,7 @@ void ControlsMenu::OnDraw(ImGuiIO& /*io*/) {
   }
   ImGui::End();
   ImGui::PopStyleVar(3);
-  if (!open) SetVisible(false);
+  if (!open) Close();  // deleted by the drawer after this draw; OnClose restores input
 }
 
 }  // namespace wet::ui

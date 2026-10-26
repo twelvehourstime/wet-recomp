@@ -5,6 +5,7 @@
 #include <rex/ui/imgui_dialog.h>
 
 #include <filesystem>
+#include <functional>
 #include <set>
 #include <string>
 
@@ -12,14 +13,18 @@ namespace wet::ui {
 
 class ControlsMenu final : public rex::ui::ImGuiDialog {
  public:
-  ControlsMenu(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path);
+  // The menu exists only while open (like the SDK overlays): a registered dialog makes the
+  // presenter repaint continuously and present from the UI thread. It deletes itself after
+  // closing and calls on_closed so the owner can drop its pointer.
+  ControlsMenu(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path,
+               std::function<void()> on_closed);
   ~ControlsMenu() override;
 
-  void Toggle();
-  bool visible() const { return visible_; }
+  void RequestClose() { Close(); }
 
  protected:
   void OnDraw(ImGuiIO& io) override;
+  void OnClose() override;
 
  private:
   enum class Capture { kNone, kKeyReplace, kKeyAdd, kPad };
@@ -32,6 +37,7 @@ class ControlsMenu final : public rex::ui::ImGuiDialog {
   void Save();
 
   std::filesystem::path config_path_;
+  std::function<void()> on_closed_;
   bool visible_ = false;
 
   Capture capture_ = Capture::kNone;
