@@ -44,10 +44,10 @@ index c8751b7..4708456 100644
                               public rex::ui::WindowInputListener,
                               public rex::ui::WindowListener {
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index b3947e0..4a30c79 100644
+index b3947e0..34b5e7e 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -49,6 +49,11 @@ enum class CounterId : uint16_t {
+@@ -49,6 +49,12 @@ enum class CounterId : uint16_t {
    kPipelineCacheHits,
    kPipelineCacheMisses,
  
@@ -55,12 +55,13 @@ index b3947e0..4a30c79 100644
 +  kPipelineWaitUs,
 +  kShaderTranslateUs,
 +  kPresentIntervalUs,
++  kCpThreadCpuUs,
 +
    kCount  // sentinel -- must be last
  };
  
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index 536009e..d82faca 100644
+index 536009e..69fcf2f 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -17,6 +17,9 @@
@@ -73,27 +74,29 @@ index 536009e..d82faca 100644
  #include <cstring>
  
  REXCVAR_DEFINE_STRING(perf_log_csv, "", "Perf",
-@@ -49,6 +52,9 @@ constexpr const char* kCounterNames[] = {
+@@ -49,6 +52,10 @@ constexpr const char* kCounterNames[] = {
      "texture_cache_misses",
      "pipeline_cache_hits",
      "pipeline_cache_misses",
 +    "pipeline_wait_us",
 +    "shader_translate_us",
 +    "present_interval_us",
++    "cp_thread_cpu_us",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -72,6 +78,9 @@ constexpr bool kIsGauge[] = {
+@@ -72,6 +79,10 @@ constexpr bool kIsGauge[] = {
      false,  // kTextureCacheMisses
      false,  // kPipelineCacheHits
      false,  // kPipelineCacheMisses
 +    false,  // kPipelineWaitUs
 +    false,  // kShaderTranslateUs
 +    false,  // kPresentIntervalUs   (set each present)
++    false,  // kCpThreadCpuUs       (set each swap)
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
  
-@@ -137,7 +146,12 @@ void SetCsvLogPath(const std::string& path) {
+@@ -137,7 +148,12 @@ void SetCsvLogPath(const std::string& path) {
    if (path.empty())
      return;
  
@@ -106,6 +109,41 @@ index 536009e..d82faca 100644
    if (!g_csv_file) {
      REXLOG_WARN("perf: failed to open CSV log: {}", path);
      g_csv_path.clear();
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index a744375..69a645b 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -22,6 +22,9 @@
+ #include <rex/perf/counter.h>
+ #include <rex/chrono/clock.h>
+ #include <rex/graphics/command_processor.h>
++#if defined(_WIN32)
++#include "../core/platform_win.h"
++#endif
+ #include <rex/graphics/flags.h>
+ #include <rex/graphics/graphics_system.h>
+ #include <rex/graphics/pipeline/texture/info.h>
+@@ -941,6 +944,20 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
+       PROFILE_FPS(freq / (now - last_frame_tick));
+     }
+     last_frame_tick = now;
++#if defined(_WIN32)
++    {  // wet-recomp patch: CPU time of this (command processor) thread since the last swap.
++      static uint64_t last_cpu_100ns = 0;
++      FILETIME creation, exit, kernel, user;
++      if (GetThreadTimes(GetCurrentThread(), &creation, &exit, &kernel, &user)) {
++        uint64_t cpu = ((uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime) +
++                       ((uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime);
++        if (last_cpu_100ns) {
++          PERF_counter_set(kCpThreadCpuUs, int64_t((cpu - last_cpu_100ns) / 10));
++        }
++        last_cpu_100ns = cpu;
++      }
++    }
++#endif
+   }
+ #endif
+   rex::perf::Profiler::Flip();
 diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
 index 8e6b854..a1fc14e 100644
 --- a/src/graphics/d3d12/pipeline_cache.cpp
