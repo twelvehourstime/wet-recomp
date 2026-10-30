@@ -14,6 +14,7 @@
 #include "input/pad_remap.h"
 #include "input_defaults.h"
 #include "ui/controls_menu.h"
+#include "ui/display_mode.h"
 
 #include <rex/ui/keybinds.h>
 
@@ -34,6 +35,7 @@ class WetApp : public rex::ReXApp {
   // Wet always needs the Xenos GPU emulation; the SDK default (empty) runs headless.
   void OnPreSetup(rex::RuntimeConfig& config) override {
     if (config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
+    wet::display::ApplyStartupFlag();  // config is loaded by now; window not created yet
   }
 
   // SDK v0.10.0 defines --perf_log_csv but never applies it; open the per-frame CSV here.
@@ -52,6 +54,8 @@ class WetApp : public rex::ReXApp {
 
   // Controls menu (keyboard/mouse and controller bindings), toggled with F1.
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    wet::display::SetWindow(window());
+    wet::display::ApplyAfterWindowOpen();
     controls_drawer_ = drawer;
     rex::ui::RegisterBind("bind_wet_controls", "F1", "Toggle Wet controls menu", [this] {
       if (controls_menu_) {

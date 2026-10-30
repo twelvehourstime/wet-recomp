@@ -20,6 +20,7 @@ set(WET_SOURCES
     src/debug/memtool.cpp
     src/input/pad_remap.cpp
     src/ui/controls_menu.cpp
+    src/ui/display_mode.cpp
 )
 
 if(WIN32)

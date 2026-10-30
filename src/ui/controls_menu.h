@@ -32,6 +32,7 @@ class ControlsMenu final : public rex::ui::ImGuiDialog {
   void SetVisible(bool visible);
   void DrawKeyboardTab();
   void DrawControllerTab();
+  void DrawDisplayTab();
   void PollKeyCapture();
   void PollPadCapture();
   void Save();

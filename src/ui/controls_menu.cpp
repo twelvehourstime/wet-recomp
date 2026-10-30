@@ -16,6 +16,7 @@
 #include "ui/controls_menu.h"
 
 #include "input/pad_remap.h"
+#include "ui/display_mode.h"
 
 #include <rex/cvar.h>
 #include <rex/input/mnk/mnk_input_driver.h>
@@ -35,6 +36,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <utility>
 #include <string_view>
 #include <vector>
 
@@ -337,6 +339,52 @@ void ControlsMenu::DrawControllerTab() {
   }
 }
 
+void ControlsMenu::DrawDisplayTab() {
+  ImGui::TextUnformatted("Display mode");
+  const wet::display::Mode current = wet::display::Current();
+  for (wet::display::Mode mode : {wet::display::Mode::kFullscreen,
+                                  wet::display::Mode::kBorderless,
+                                  wet::display::Mode::kWindowed}) {
+    if (ImGui::RadioButton(wet::display::Label(mode), mode == current) && mode != current) {
+      status_ = wet::display::Apply(mode);
+    }
+  }
+  ImGui::TextDisabled("Exclusive fullscreen uses the desktop resolution and refresh rate.");
+  ImGui::Spacing();
+  bool vsync = GetString("host_vsync") == "true";
+  if (ImGui::Checkbox("Vertical sync", &vsync)) {
+    rex::cvar::SetFlagByName("host_vsync", vsync ? "true" : "false");
+    status_ = "Applied (Save to keep)";
+  }
+  ImGui::TextDisabled("Off: presents as soon as a frame is ready, paced at 60 Hz (VRR/tearing).");
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::TextUnformatted("Render resolution (takes effect on the next launch)");
+  const std::string scale = GetString("resolution_scale");
+  for (auto [label, value] : {std::pair{"720p (native)", "1"}, std::pair{"1440p (2x)", "2"},
+                              std::pair{"2160p (3x)", "3"}}) {
+    if (ImGui::RadioButton(label, scale == value) && scale != value) {
+      rex::cvar::SetFlagByName("resolution_scale", value);
+      status_ = "Render resolution applies after restart (Save to keep)";
+    }
+  }
+  ImGui::TextDisabled("The game renders at 720p; the SDK scales render targets by whole numbers.");
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Output / window resolution (takes effect on the next launch)");
+  const std::string preset = GetString("resolution");
+  for (auto [label, value] : {std::pair{"1280x720", ""}, std::pair{"1920x1080", "1080p"},
+                              std::pair{"2560x1440", "1440p"}}) {
+    if (ImGui::RadioButton(label, preset == value) && preset != value) {
+      rex::cvar::SetFlagByName("resolution", value);
+      status_ = "Output resolution applies after restart (Save to keep)";
+    }
+  }
+  ImGui::TextDisabled("Window size in windowed mode and the guest video mode (output scaling).");
+  ImGui::TextDisabled("Windowed size: window_width / window_height in wet.toml (0 = default).");
+}
+
 // Writes the config file itself rather than through rex::cvar::SaveConfig: that writes every
 // non-default cvar, which also captured one-off launch flags (log file, perf CSV, game root)
 // and gave no way to see what was written. Only values the user set in-app or that came from
@@ -350,7 +398,8 @@ void ControlsMenu::Save() {
     names.push_back(std::string("wet_action_") + wet::pad::GetControl(i).id);
   }
   for (const char* c : {"wet_mouse_sensitivity", "wet_mouse_invert_y", "wet_raw_mouse",
-                        "wet_pad_swap_sticks", "wet_pad_invert_look_y", "bind_wet_controls"})
+                        "wet_pad_swap_sticks", "wet_pad_invert_look_y", "bind_wet_controls",
+                        "wet_display_mode", "host_vsync", "resolution_scale", "resolution"})
     names.push_back(c);
   std::set<std::string> explicit_names(names.begin(), names.end());
 
@@ -376,7 +425,7 @@ void ControlsMenu::Save() {
     auto src = rex::cvar::GetFlagSource(name);
     if ((src == rex::cvar::Source::kRuntime || src == rex::cvar::Source::kConfig) &&
         rex::cvar::HasNonDefaultValue(name) && name != "mnk_mode" && name != "mnk_mouse" &&
-        name != "mnk_mouse_to_stick") {
+        name != "mnk_mouse_to_stick" && name != "fullscreen") {  // derived from wet_display_mode
       write(name);
     }
   }
@@ -406,6 +455,10 @@ void ControlsMenu::OnDraw(ImGuiIO& /*io*/) {
       }
       if (ImGui::BeginTabItem("Controller")) {
         DrawControllerTab();
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Display")) {
+        DrawDisplayTab();
         ImGui::EndTabItem();
       }
       ImGui::EndTabBar();
