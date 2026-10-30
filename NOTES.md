@@ -398,3 +398,7 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   now off (CPU snapshot copy at record time, ~3.5 ms on the heaviest frames, 3 copy threads).
   Lesson: "the console GPU also reads later" was wrong for this data; the game relies on the
   emulator's snapshot timing. RTV render-target path: no GPU gain over ROV at 2x (19.0 vs 17.7 ms).
+- 2x render scale GPU cost: gamma_render_target_as_unorm16=false and native_2x_msaa=false
+  changed nothing (GPU 19.0 vs 18.9 ms at 1600-2200 draws), like the RTV path. The GPU time at
+  2x is the game's own shading at 4x pixels; 1x holds a locked 60. Remaining 2x options are
+  structural (live resolution switching) - not pursued.
