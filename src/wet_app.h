@@ -36,12 +36,6 @@ class WetApp : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     if (config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
     wet::display::ApplyStartupFlag();  // config is loaded by now; window not created yet
-    // Measured for Wet (NOTES.md, 2026-10-30): one CPU write invalidating a 4 KB page instead
-    // of a 256 KB block uploads ~22% less per frame with no visible game-thread cost.
-    if (rex::cvar::GetFlagSource("shared_memory_invalidate_block_log2") ==
-        rex::cvar::Source::kDefault) {
-      rex::cvar::SetFlagByName("shared_memory_invalidate_block_log2", "12");
-    }
   }
 
   // SDK v0.10.0 defines --perf_log_csv but never applies it; open the per-frame CSV here.
@@ -54,7 +48,17 @@ class WetApp : public rex::ReXApp {
                   int(rex::cvar::GetFlagSource(n)));
   }
 
-  void OnPostSetup() override { wet::memtool::StartIfEnabled(); }
+  void OnPostSetup() override {
+    // GPU plugin cvars exist only once the plugin DLL is loaded (not yet in OnPreSetup).
+    // Measured for Wet (NOTES.md, 2026-10-30): one CPU write invalidating a 4 KB page instead
+    // of a 256 KB block uploads ~22% less per frame with no visible game-thread cost.
+    if (rex::cvar::GetFlagSource("shared_memory_invalidate_block_log2") ==
+        rex::cvar::Source::kDefault) {
+      if (!rex::cvar::SetFlagByName("shared_memory_invalidate_block_log2", "12"))
+        REXLOG_WARN("wet: could not set shared_memory_invalidate_block_log2");
+    }
+    wet::memtool::StartIfEnabled();
+  }
 
   void OnConfigurePaths(rex::PathConfig& paths) override { config_path_ = paths.config_path; }
 
