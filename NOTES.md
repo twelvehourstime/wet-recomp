@@ -382,3 +382,13 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   draw, 15-27 ms replay per frame at 2x render scale) plus GPU time at 2x.
 - F2 writes a test marker (logs/marks.txt: n, time, perf CSV row); tools/analysis/wait_mark.py
   waits for it, so test runs no longer need a typed "done".
+- GPU timestamps (gpu_submission_us, SDK patch 16): at 2x render scale the GPU needs 18.3 ms per
+  frame at 1600-2200 draws (12.7 ms even at 300-800), so heavy scenes are GPU-bound at 2x; at
+  1x 13.7 ms and every draw band holds 60 (20k frames, 5 frames > 33 ms). The first area
+  transition's texture burst is real GPU work: ~210 ms at 2x, ~120 ms at 1x, over 3-5 frames;
+  a later, larger burst (199 textures, 49 MB) costs nothing extra, so it is about what those
+  textures are, not how many (texture_load_host_bytes added to check for expansion on load).
+  Batched texture loads measured worse on the GPU (99 -> 177 ms) and were dropped. The plain
+  512 MB shared-memory buffer (no tile mappings) saved 13 ms on the burst frame: port default.
+  The SDK uses the ROV EDRAM path (render_target_path_d3d12 unset); the RTV path is the next
+  thing to try for the 2x GPU cost.

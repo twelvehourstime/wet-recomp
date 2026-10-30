@@ -63,6 +63,11 @@ class WetApp : public rex::ReXApp {
       if (!rex::cvar::SetFlagByName("shared_memory_invalidate_block_log2", "12"))
         REXLOG_WARN("wet: could not set shared_memory_invalidate_block_log2");
     }
+    // A plain 512 MB shared-memory buffer instead of a tiled one: texture streaming bursts
+    // spent ~13 ms per frame on tile-mapping updates (NOTES.md, 2026-10-30).
+    if (rex::cvar::GetFlagSource("d3d12_tiled_shared_memory") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("d3d12_tiled_shared_memory", "false");
+    }
     wet::memtool::StartIfEnabled();
   }
 
