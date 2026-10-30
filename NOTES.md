@@ -335,3 +335,32 @@ lines from the function start (labels verify the count); scratch script /tmp/add
 - memtool watch gotcha: ExceptionInformation[1] is the faulting address, so a 16-byte vector
   store starting below the watched range is missed; watch a wider range. The handler logs each
   unique rip once.
+
+## Session 2026-10-30: display modes, vsync, frame rate (GPU thread)
+- Display tab (F1): exclusive fullscreen (SDK patch 9: the runtime DLL has its own SDL3, so
+  the exe cannot touch the window through SDL), borderless, windowed; render scale 1x/2x/3x
+  (resolution_scale) and output resolution (resolution preset), both next-launch.
+- Host vsync (SDK patch 10): sync interval 0 without the tearing flag, 4-buffer waitable swap
+  chain with frame latency 1, UI-thread paints keyed to guest frame publication. Three earlier
+  variants starved the guest (13-53 fps): the SDK's permanent toast drawer re-arms a repaint
+  after every paint, and every vsync'd UI present stalled the GPU queue the guest shares
+  (command_buffer_stalls = 1/frame, cp_fence_wait_us ~11 ms). Verified: 60 fps, zero stalls.
+  Note the user's desktop is 60 Hz, so exclusive mode and vsync pick 60 Hz.
+- Frame drops in busy scenes (1500-2000+ draws) are CPU-bound on the SDK's "GPU Commands"
+  thread (cp_thread_cpu_us tracks frame time; GPU waits 0). Sampling profiler added to the
+  memtool (profile.req) with SDK PDBs from third_party/rexglue-sdk/out/win-amd64/RelWithDebInfo.
+  Profile at ~1160 draws: UploadRanges 34% (memcpy of guest memory to upload buffers),
+  page protection 11%, NVIDIA driver 16%, register writes 12%, texture cache ~8%.
+- Upload volume: 50-65 MB/frame in 2000-2900 ranges (counters shared_mem_upload_*). Causes:
+  the game rewrites ~45 MB of dynamic vertex data per frame (real), plus 256 KB invalidation
+  blocks (SDK patch 11 makes it a cvar; 4 KB = -22% upload, ~700 access violations/frame with
+  no visible game-thread cost -> port default 12 in WetApp::OnPreSetup).
+- Parallel memcpy (patch 12) gained only 0.5 ms: the copy into write-combined upload memory is
+  bandwidth-bound (12.6 GB/s). Timers: upload 5.6 ms = copy 3.55 + protect 1.15 + pool 0.9.
+- Zero-copy (patch 13): D3D12 heap opened over the guest physical memory
+  (OpenExistingHeapFromAddress works on the section view; the buffer must be placed with
+  ALLOW_CROSS_ADAPTER + GENERIC_READ, heap flags 0x421), uploads are CopyBufferRegion from
+  it. Result at 1600-2200 draws: GPU thread 18.5 -> 14.1 ms, frame 19.0 -> 17.6 ms; 1200-1600
+  draws now a flat 60. Upload cost left: ~1 ms of page re-protection. User saw no artifacts.
+- Next for frame rate: re-profile on the zero-copy build; candidates are the driver/command
+  recording share, register-write path, texture cache hashing, and the protect calls.

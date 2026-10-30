@@ -1,3 +1,38 @@
+diff --git a/include/rex/graphics/d3d12/shared_memory.h b/include/rex/graphics/d3d12/shared_memory.h
+index 5100818..c5c8780 100644
+--- a/include/rex/graphics/d3d12/shared_memory.h
++++ b/include/rex/graphics/d3d12/shared_memory.h
+@@ -25,6 +25,13 @@ namespace rex::graphics::d3d12 {
+ 
+ class D3D12CommandProcessor;
+ 
++// wet-recomp patch: one guest->upload-buffer copy (see D3D12SharedMemory::RunUploadCopyJobs).
++struct UploadCopyJob {
++  uint8_t* dst;
++  const uint8_t* src;
++  size_t size;
++};
++
+ class D3D12SharedMemory : public SharedMemory {
+  public:
+   D3D12SharedMemory(D3D12CommandProcessor& command_processor, memory::Memory& memory);
+@@ -81,6 +88,16 @@ class D3D12SharedMemory : public SharedMemory {
+ 
+   bool UploadRanges(const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) override;
+ 
++  // wet-recomp patch: the guest->upload-buffer memcpy of a frame's ranges is spread over
++  // worker threads (shared_memory_upload_threads); the copy commands stay on this thread.
++  std::vector<UploadCopyJob> upload_copy_jobs_;
++  void RunUploadCopyJobs();
++
++  // wet-recomp patch: D3D12 heap opened over the guest physical memory itself, so uploads are
++  // GPU copies straight from guest memory (no CPU memcpy, no upload pool). Null if unsupported.
++  ID3D12Heap* guest_heap_ = nullptr;
++  ID3D12Resource* guest_buffer_ = nullptr;
++
+  private:
+   D3D12CommandProcessor& command_processor_;
+ 
 diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
 index 1cb3faa..6e1d14e 100644
 --- a/include/rex/input/input_system.h
@@ -44,10 +79,10 @@ index c8751b7..4708456 100644
                               public rex::ui::WindowInputListener,
                               public rex::ui::WindowListener {
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index b3947e0..f10953f 100644
+index b3947e0..606f134 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -49,6 +49,13 @@ enum class CounterId : uint16_t {
+@@ -49,6 +49,20 @@ enum class CounterId : uint16_t {
    kPipelineCacheHits,
    kPipelineCacheMisses,
  
@@ -57,10 +92,31 @@ index b3947e0..f10953f 100644
 +  kPresentIntervalUs,
 +  kCpThreadCpuUs,
 +  kCpFenceWaitUs,
++  kSharedMemUploadBytes,
++  kSharedMemUploadRanges,
++  kUploadPoolPagesCreated,
++  kMemoryInvalidations,
++  kSharedMemUploadUs,
++  kSharedMemCopyUs,
++  kSharedMemProtectUs,
 +
    kCount  // sentinel -- must be last
  };
  
+diff --git a/include/rex/system/xmemory.h b/include/rex/system/xmemory.h
+index 0c39a42..19551da 100644
+--- a/include/rex/system/xmemory.h
++++ b/include/rex/system/xmemory.h
+@@ -396,6 +396,9 @@ class Memory {
+   // Base address of physical memory in the host address space.
+   // This is often something like 0x200000000.
+   inline uint8_t* physical_membase() const { return physical_membase_; }
++  // wet-recomp patch: the backing file mapping (physical memory is section offset
++  // 0x100000000, 512 MB), for D3D12 heaps opened over guest memory.
++  rex::memory::FileMappingHandle file_mapping() const { return mapping_; }
+ 
+   // Translates a guest physical address to a host address that can be accessed
+   // as a normal pointer.
 diff --git a/include/rex/ui/d3d12/d3d12_presenter.h b/include/rex/ui/d3d12/d3d12_presenter.h
 index 83d09f7..3a42715 100644
 --- a/include/rex/ui/d3d12/d3d12_presenter.h
@@ -116,7 +172,7 @@ index 71e7473..baca310 100644
    bool WarpMouseToCenter(int32_t& x_out, int32_t& y_out) override;
  
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index 536009e..f0cc8e9 100644
+index 536009e..4a8d8e2 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -17,6 +17,9 @@
@@ -129,7 +185,7 @@ index 536009e..f0cc8e9 100644
  #include <cstring>
  
  REXCVAR_DEFINE_STRING(perf_log_csv, "", "Perf",
-@@ -49,6 +52,11 @@ constexpr const char* kCounterNames[] = {
+@@ -49,6 +52,18 @@ constexpr const char* kCounterNames[] = {
      "texture_cache_misses",
      "pipeline_cache_hits",
      "pipeline_cache_misses",
@@ -138,10 +194,17 @@ index 536009e..f0cc8e9 100644
 +    "present_interval_us",
 +    "cp_thread_cpu_us",
 +    "cp_fence_wait_us",
++    "shared_mem_upload_bytes",
++    "shared_mem_upload_ranges",
++    "upload_pool_pages_created",
++    "memory_invalidations",
++    "shared_mem_upload_us",
++    "shared_mem_copy_us",
++    "shared_mem_protect_us",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -72,6 +80,11 @@ constexpr bool kIsGauge[] = {
+@@ -72,6 +87,18 @@ constexpr bool kIsGauge[] = {
      false,  // kTextureCacheMisses
      false,  // kPipelineCacheHits
      false,  // kPipelineCacheMisses
@@ -150,10 +213,17 @@ index 536009e..f0cc8e9 100644
 +    false,  // kPresentIntervalUs   (set each present)
 +    false,  // kCpThreadCpuUs       (set each swap)
 +    false,  // kCpFenceWaitUs       (accumulated, zeroed each frame)
++    false,  // kSharedMemUploadBytes
++    false,  // kSharedMemUploadRanges
++    false,  // kUploadPoolPagesCreated
++    false,  // kMemoryInvalidations (CPU-write invalidation callbacks per frame)
++    false,  // kSharedMemUploadUs
++    false,  // kSharedMemCopyUs
++    false,  // kSharedMemProtectUs
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
  
-@@ -137,7 +150,12 @@ void SetCsvLogPath(const std::string& path) {
+@@ -137,7 +164,12 @@ void SetCsvLogPath(const std::string& path) {
    if (path.empty())
      return;
  
@@ -269,6 +339,271 @@ index 8e6b854..a1fc14e 100644
    D3D12Shader& shader = static_cast<D3D12Shader&>(translation.shader());
  
    // Perform translation.
+diff --git a/src/graphics/d3d12/shared_memory.cpp b/src/graphics/d3d12/shared_memory.cpp
+index a5c97a0..642bb7a 100644
+--- a/src/graphics/d3d12/shared_memory.cpp
++++ b/src/graphics/d3d12/shared_memory.cpp
+@@ -9,6 +9,13 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/chrono/clock.h>
++#include <algorithm>
++#include <thread>
++#include <mutex>
++#include <condition_variable>
++#include <atomic>
++#include <rex/perf/counter.h>
+ #include <cstring>
+ #include <utility>
+ #include <vector>
+@@ -25,6 +32,15 @@ REXCVAR_DEFINE_BOOL(d3d12_tiled_shared_memory, true, "GPU/D3D12",
+                     "Use tiled shared memory on D3D12")
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
++// wet-recomp patch: see D3D12SharedMemory::RunUploadCopyJobs.
++REXCVAR_DEFINE_BOOL(shared_memory_gpu_read_guest, true, "GPU",
++                    "Upload guest memory to the GPU shared buffer by GPU copies from a D3D12 heap "
++                    "opened over guest memory (no CPU copy); off = CPU copies through upload buffers");
++
++REXCVAR_DEFINE_INT32(shared_memory_upload_threads, 3, "GPU",
++                     "Worker threads that copy guest memory into GPU upload buffers alongside the GPU command thread (0 = copy on the command thread only, the original behaviour)")
++    .range(0, 15);
++
+ namespace rex::graphics::d3d12 {
+ 
+ D3D12SharedMemory::D3D12SharedMemory(D3D12CommandProcessor& command_processor,
+@@ -81,6 +97,76 @@ bool D3D12SharedMemory::Initialize() {
+   buffer_gpu_address_ = buffer_->GetGPUVirtualAddress();
+   buffer_uav_writes_commit_needed_ = false;
+ 
++  // wet-recomp patch: let the GPU read guest memory directly for uploads.
++  if (REXCVAR_GET(shared_memory_gpu_read_guest)) {
++    ID3D12Device3* device3 = nullptr;
++    D3D12_FEATURE_DATA_EXISTING_HEAPS existing_heaps = {};
++    if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device3))) &&
++        SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_EXISTING_HEAPS, &existing_heaps,
++                                              sizeof(existing_heaps))) &&
++        existing_heaps.Supported) {
++      UINT64 heap_offset = 0;
++      HRESULT hr = device3->OpenExistingHeapFromAddress(memory().physical_membase(),
++                                                        IID_PPV_ARGS(&guest_heap_));
++      if (FAILED(hr)) {
++        // The physical view is section offset 0x100000000 of the guest memory mapping.
++        hr = device3->OpenExistingHeapFromFileMapping(
++            reinterpret_cast<HANDLE>(static_cast<intptr_t>(memory().file_mapping())),
++                                                      IID_PPV_ARGS(&guest_heap_));
++        heap_offset = 0x100000000ull;
++      }
++      if (SUCCEEDED(hr) && guest_heap_) {
++        D3D12_HEAP_DESC heap_desc = guest_heap_->GetDesc();
++        REXGPU_INFO("Shared memory: existing heap {} MB, flags 0x{:X}, type {}, page property {}, "
++                    "pool {}, alignment {}",
++                    heap_desc.SizeInBytes >> 20, uint32_t(heap_desc.Flags),
++                    int(heap_desc.Properties.Type), int(heap_desc.Properties.CPUPageProperty),
++                    int(heap_desc.Properties.MemoryPoolPreference), heap_desc.Alignment);
++        // Existing-memory heaps have their own placement rules; try the plausible
++        // flag / initial state combinations and keep the first that the runtime accepts.
++        const D3D12_RESOURCE_FLAGS flag_candidates[] = {D3D12_RESOURCE_FLAG_NONE,
++                                                        D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER};
++        const D3D12_RESOURCE_STATES state_candidates[] = {D3D12_RESOURCE_STATE_GENERIC_READ,
++                                                          D3D12_RESOURCE_STATE_COPY_SOURCE,
++                                                          D3D12_RESOURCE_STATE_COMMON};
++        HRESULT place_hr = E_FAIL;
++        if (heap_desc.SizeInBytes >= heap_offset + kBufferSize) {
++          for (D3D12_RESOURCE_FLAGS flags : flag_candidates) {
++            for (D3D12_RESOURCE_STATES state : state_candidates) {
++              D3D12_RESOURCE_DESC guest_buffer_desc;
++              ui::d3d12::util::FillBufferResourceDesc(guest_buffer_desc, kBufferSize, flags);
++              place_hr = device->CreatePlacedResource(guest_heap_, heap_offset, &guest_buffer_desc,
++                                                      state, nullptr,
++                                                      IID_PPV_ARGS(&guest_buffer_));
++              REXGPU_INFO("Shared memory: place guest buffer flags 0x{:X} state 0x{:X}: 0x{:08X}",
++                          uint32_t(flags), uint32_t(state), uint32_t(place_hr));
++              if (SUCCEEDED(place_hr)) break;
++            }
++            if (SUCCEEDED(place_hr)) break;
++          }
++        }
++        if (SUCCEEDED(place_hr) && guest_buffer_) {
++          REXGPU_INFO("Shared memory: uploads read guest memory directly (offset 0x{:X})",
++                      heap_offset);
++        } else {
++          REXGPU_WARN("Shared memory: existing heap opened but the guest buffer could not be "
++                      "placed (0x{:08X}); using CPU upload copies",
++                      uint32_t(place_hr));
++          ui::d3d12::util::ReleaseAndNull(guest_buffer_);
++          ui::d3d12::util::ReleaseAndNull(guest_heap_);
++        }
++      } else {
++        REXGPU_WARN("Shared memory: could not open a D3D12 heap over guest memory (0x{:08X}); "
++                    "using CPU upload copies",
++                    uint32_t(hr));
++        guest_heap_ = nullptr;
++      }
++    } else {
++      REXGPU_INFO("Shared memory: D3D12 existing heaps unsupported; using CPU upload copies");
++    }
++    if (device3) device3->Release();
++  }
++
+   D3D12_DESCRIPTOR_HEAP_DESC buffer_descriptor_heap_desc;
+   buffer_descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+   buffer_descriptor_heap_desc.NumDescriptors = uint32_t(BufferDescriptorIndex::kCount);
+@@ -143,6 +229,8 @@ bool D3D12SharedMemory::Initialize() {
+ 
+ void D3D12SharedMemory::Shutdown(bool from_destructor) {
+   upload_buffer_pool_.reset();
++  ui::d3d12::util::ReleaseAndNull(guest_buffer_);  // wet-recomp patch
++  ui::d3d12::util::ReleaseAndNull(guest_heap_);
+ 
+   ui::d3d12::util::ReleaseAndNull(buffer_descriptor_heap_);
+ 
+@@ -306,12 +394,31 @@ bool D3D12SharedMemory::UploadRanges(
+   if (upload_page_ranges.empty()) {
+     return true;
+   }
++  const uint64_t upload_start_tick = rex::chrono::Clock::QueryHostTickCount();  // wet-recomp
+   CommitUAVWritesAndTransitionBuffer(D3D12_RESOURCE_STATE_COPY_DEST);
+   command_processor_.SubmitBarriers();
+   auto& command_list = command_processor_.GetDeferredCommandList();
++  if (guest_buffer_) {
++    // wet-recomp patch: GPU copies straight from guest memory. As on the console, the GPU
++    // reads the memory when the copy executes rather than when it is recorded.
++    for (auto upload_range : upload_page_ranges) {
++      const uint64_t offset = uint64_t(upload_range.first) << page_size_log2();
++      const uint64_t length = uint64_t(upload_range.second) << page_size_log2();
++      PERF_counter_add(kSharedMemUploadRanges, 1);
++      PERF_counter_add(kSharedMemUploadBytes, int64_t(length));
++      MakeRangeValid(uint32_t(offset), uint32_t(length), false);
++      command_list.D3DCopyBufferRegion(buffer_, offset, guest_buffer_, offset, length);
++    }
++    PERF_counter_add(kSharedMemUploadUs,
++                     int64_t((rex::chrono::Clock::QueryHostTickCount() - upload_start_tick) *
++                             1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
++    return true;
++  }
+   for (auto upload_range : upload_page_ranges) {
+     uint32_t upload_range_start = upload_range.first;
+     uint32_t upload_range_length = upload_range.second;
++    PERF_counter_add(kSharedMemUploadRanges, 1);  // wet-recomp patch
++    PERF_counter_add(kSharedMemUploadBytes, int64_t(upload_range_length) << page_size_log2());
+     while (upload_range_length != 0) {
+       ID3D12Resource* upload_buffer;
+       size_t upload_buffer_offset, upload_buffer_size;
+@@ -324,9 +431,16 @@ bool D3D12SharedMemory::UploadRanges(
+         return false;
+       }
+       MakeRangeValid(upload_range_start << page_size_log2(), uint32_t(upload_buffer_size), false);
+-      std::memcpy(upload_buffer_mapping,
+-                  memory().TranslatePhysical(upload_range_start << page_size_log2()),
+-                  upload_buffer_size);
++      const uint8_t* upload_src =
++          memory().TranslatePhysical(upload_range_start << page_size_log2());
++      if (REXCVAR_GET(shared_memory_upload_threads) > 0) {  // wet-recomp patch
++        upload_copy_jobs_.push_back({upload_buffer_mapping, upload_src, upload_buffer_size});
++      } else {
++        const uint64_t t0 = rex::chrono::Clock::QueryHostTickCount();
++        std::memcpy(upload_buffer_mapping, upload_src, upload_buffer_size);
++        PERF_counter_add(kSharedMemCopyUs, int64_t((rex::chrono::Clock::QueryHostTickCount() - t0) *
++                                                   1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
++      }
+       command_list.D3DCopyBufferRegion(buffer_, upload_range_start << page_size_log2(),
+                                        upload_buffer, UINT64(upload_buffer_offset),
+                                        UINT64(upload_buffer_size));
+@@ -335,7 +449,92 @@ bool D3D12SharedMemory::UploadRanges(
+       upload_range_length -= upload_buffer_pages;
+     }
+   }
++  if (!upload_copy_jobs_.empty()) {
++    const uint64_t t0 = rex::chrono::Clock::QueryHostTickCount();
++    RunUploadCopyJobs();
++    PERF_counter_add(kSharedMemCopyUs, int64_t((rex::chrono::Clock::QueryHostTickCount() - t0) *
++                                               1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
++  }
++  PERF_counter_add(kSharedMemUploadUs,
++                   int64_t((rex::chrono::Clock::QueryHostTickCount() - upload_start_tick) * 1000000 /
++                           rex::chrono::Clock::QueryHostTickFrequency()));
+   return true;
+ }
+ 
++// wet-recomp patch: persistent copy workers. The pool is leaked on purpose (detached threads
++// sleeping on its condition variable must not outlive a destroyed pool at process exit).
++namespace {
++struct UploadCopyPool {
++  std::mutex mutex;
++  std::condition_variable wake;
++  uint64_t generation = 0;
++  const UploadCopyJob* jobs = nullptr;
++  size_t job_count = 0;
++  std::atomic<size_t> next{0};
++  std::atomic<size_t> done{0};
++  size_t worker_count = 0;
++
++  void Work(const UploadCopyJob* j, size_t count) {
++    for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < count;) {
++      std::memcpy(j[i].dst, j[i].src, j[i].size);
++      done.fetch_add(1, std::memory_order_release);
++    }
++  }
++  void EnsureWorkers(size_t count) {
++    for (; worker_count < count; ++worker_count) {
++      std::thread([this] {
++        uint64_t seen = 0;
++        while (true) {
++          const UploadCopyJob* j;
++          size_t count;
++          {
++            std::unique_lock<std::mutex> lock(mutex);
++            wake.wait(lock, [&] { return generation != seen; });
++            seen = generation;
++            j = jobs;
++            count = job_count;
++          }
++          Work(j, count);
++        }
++      }).detach();
++    }
++  }
++};
++UploadCopyPool* g_upload_copy_pool = nullptr;
++}  // namespace
++
++void D3D12SharedMemory::RunUploadCopyJobs() {
++  const size_t threads = size_t(std::max(INT32_C(0), REXCVAR_GET(shared_memory_upload_threads)));
++  const size_t count = upload_copy_jobs_.size();
++  if (threads == 0 || count < 8) {
++    for (const UploadCopyJob& job : upload_copy_jobs_) std::memcpy(job.dst, job.src, job.size);
++    upload_copy_jobs_.clear();
++    return;
++  }
++  if (!g_upload_copy_pool) g_upload_copy_pool = new UploadCopyPool();
++  UploadCopyPool& pool = *g_upload_copy_pool;
++  pool.EnsureWorkers(threads);
++  {
++    std::lock_guard<std::mutex> lock(pool.mutex);
++    pool.jobs = upload_copy_jobs_.data();
++    pool.job_count = count;
++    pool.next.store(0, std::memory_order_relaxed);
++    pool.done.store(0, std::memory_order_relaxed);
++    ++pool.generation;
++  }
++  pool.wake.notify_all();
++  pool.Work(upload_copy_jobs_.data(), count);  // this thread helps
++  while (pool.done.load(std::memory_order_acquire) < count) {
++    YieldProcessor();
++  }
++  {
++    // Workers only touch jobs/job_count under the lock, and all copies are done; make sure no
++    // worker still holds a stale pointer into upload_copy_jobs_ before it is reused.
++    std::lock_guard<std::mutex> lock(pool.mutex);
++    pool.jobs = nullptr;
++    pool.job_count = 0;
++  }
++  upload_copy_jobs_.clear();
++}
++
+ }  // namespace rex::graphics::d3d12
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
 index 8f2fcb0..66fb7a6 100644
 --- a/src/graphics/graphics_system.cpp
@@ -340,6 +675,79 @@ index 8f2fcb0..66fb7a6 100644
          return 0;
        }));
    // TODO: set_can_debugger_suspend not yet ported
+diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
+index ec0df7c..e7edd9a 100644
+--- a/src/graphics/shared_memory.cpp
++++ b/src/graphics/shared_memory.cpp
+@@ -9,6 +9,9 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/chrono/clock.h>
++#include <rex/perf/counter.h>
++#include <rex/cvar.h>
+ #include <algorithm>
+ #include <cstring>
+ #include <utility>
+@@ -20,6 +23,11 @@
+ #include <rex/math.h>
+ #include <rex/memory.h>
+ 
++// wet-recomp patch: see MemoryInvalidationCallback.
++REXCVAR_DEFINE_INT32(shared_memory_invalidate_block_log2, 18, "GPU",
++                     "Log2 of the block (bytes) a CPU write to GPU-visible memory invalidates (18 = 256 KB, the original; 16 = 64 KB; 12 = one 4 KB page)")
++    .range(12, 18);
++
+ namespace rex::graphics {
+ 
+ SharedMemory::SharedMemory(memory::Memory& memory) : memory_(memory) {
+@@ -309,9 +317,12 @@ void SharedMemory::MakeRangeValid(uint32_t start, uint32_t length, bool written_
+   }
+ 
+   if (memory_invalidation_callback_handle_) {
++    const uint64_t t0 = rex::chrono::Clock::QueryHostTickCount();  // wet-recomp patch
+     memory().EnablePhysicalMemoryAccessCallbacks(
+         valid_page_first << page_size_log2_,
+         (valid_page_last - valid_page_first + 1) << page_size_log2_, true, false);
++    PERF_counter_add(kSharedMemProtectUs, int64_t((rex::chrono::Clock::QueryHostTickCount() - t0) *
++                                                  1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
+   }
+ }
+ 
+@@ -484,6 +495,7 @@ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallback(
+   if (length == 0 || physical_address_start >= kBufferSize) {
+     return std::make_pair(uint32_t(0), UINT32_MAX);
+   }
++  PERF_counter_add(kMemoryInvalidations, 1);  // wet-recomp patch
+   length = std::min(length, kBufferSize - physical_address_start);
+   uint32_t physical_address_last = physical_address_start + (length - 1);
+ 
+@@ -503,6 +515,16 @@ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallback(
+     // software-rendered game) runs at 4 FPS on Intel Core i7-3770, with 64 KB,
+     // the CPU game code takes 3 ms to run per frame, but with 256 KB, it's
+     // 0.7 ms.
++    // wet-recomp patch: the widening block is configurable (default 256 KB as before). Wet
++    // uploaded 50-65 MB per frame at 256 KB because static vertex data shares blocks with
++    // per-frame CPU writes; smaller blocks trade upload volume for more access violations.
++    const uint32_t widen_pages_log2 =
++        uint32_t(std::clamp(REXCVAR_GET(shared_memory_invalidate_block_log2) -
++                                int32_t(page_size_log2_),
++                            0, 6));
++    const uint32_t widen_mask = (uint32_t(1) << widen_pages_log2) - 1;
++    const uint32_t page_first_widened = page_first & ~widen_mask;
++    const uint32_t page_last_widened = page_last | widen_mask;
+     if (page_first & 63) {
+       uint64_t gpu_written_start = system_page_flags_valid_and_gpu_written_[block_first];
+       gpu_written_start &= (uint64_t(1) << (page_first & 63)) - 1;
+@@ -514,6 +536,8 @@ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallback(
+       page_last =
+           (page_last & ~uint32_t(63)) + (std::max(rex::tzcnt(gpu_written_end), uint8_t(1)) - 1);
+     }
++    page_first = std::max(page_first, page_first_widened);
++    page_last = std::min(page_last, page_last_widened);
+   }
+ 
+   for (uint32_t i = block_first; i <= block_last; ++i) {
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
 index 813bb1c..386c5a2 100644
 --- a/src/input/input_system.cpp
@@ -696,6 +1104,26 @@ index 306118e..dcf7bdc 100644
    // Even if presentation has failed, work might have been enqueued anyway
    // internally before the failure according to Jesse Natalie from the DirectX
    // Discord server.
+diff --git a/src/ui/graphics_upload_buffer_pool.cpp b/src/ui/graphics_upload_buffer_pool.cpp
+index 407498e..7e3fb86 100644
+--- a/src/ui/graphics_upload_buffer_pool.cpp
++++ b/src/ui/graphics_upload_buffer_pool.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/perf/counter.h>
+ #include <algorithm>
+ 
+ #include <rex/assert.h>
+@@ -122,6 +123,7 @@ GraphicsUploadBufferPool::Page* GraphicsUploadBufferPool::Request(uint64_t submi
+     }
+     if (!writable_first_) {
+       // Create a new page if none available.
++      PERF_counter_add(kUploadPoolPagesCreated, 1);  // wet-recomp patch
+       writable_first_ = CreatePageImplementation();
+       if (!writable_first_) {
+         // Failed to create.
 diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
 index 7360ed9..21bc7a0 100644
 --- a/src/ui/presenter.cpp

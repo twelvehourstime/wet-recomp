@@ -5,6 +5,8 @@
 //                        dump-<n>.idx (one "guest_start size file_offset" line per region)
 //   poke.req          -> each line "<hex guest addr> f32|u32 <value>" is written to guest
 //                        memory (big-endian, as the game sees it), once
+//   profile.req       -> "<seconds> [thread name substring]": sampling profile of a host
+//                        thread (default "GPU Commands") to profile-<n>.txt.
 //   watch.req         -> "<hex guest addr> <hex size> <seconds>": data watchpoint. The host page
 //                        is guarded; every access inside the range logs the reading/writing
 //                        host function once (generated code is named sub_<guest address>)
@@ -34,9 +36,14 @@
 #endif
 #include <windows.h>
 #include <dbghelp.h>
+#include <tlhelp32.h>
 
+#include <algorithm>
+#include <iomanip>
+#include <map>
 #include <mutex>
 #include <set>
+#include <vector>
 
 REXCVAR_DEFINE_BOOL(wet_memtool, false, "Wet/Debug", "Enable the guest memory dump/poke tool");
 REXCVAR_DEFINE_STRING(wet_memtool_dir, "E:/WET/work/memtool", "Wet/Debug",
@@ -170,6 +177,156 @@ void Watch(const std::filesystem::path& req) {
   REXLOG_INFO("wet memtool: watch ended");
 }
 
+
+// --- sampling profiler: profile.req "<seconds> [thread-name-substring]" ---
+// Samples one host thread's stack (default: the SDK's "GPU Commands" thread) with
+// SuspendThread + StackWalk64 about 1000 times per second and writes profile-<n>.txt with
+// the hottest functions by self and by inclusive sample count.
+typedef HRESULT(WINAPI* GetThreadDescriptionFn)(HANDLE, PWSTR*);
+
+HANDLE FindThreadByName(const std::string& needle, std::string& found_name) {
+  auto get_desc = reinterpret_cast<GetThreadDescriptionFn>(
+      GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription"));
+  if (!get_desc) return nullptr;
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snap == INVALID_HANDLE_VALUE) return nullptr;
+  THREADENTRY32 te{sizeof(te)};
+  HANDLE result = nullptr;
+  const DWORD pid = GetCurrentProcessId();
+  for (BOOL ok = Thread32First(snap, &te); ok && !result; ok = Thread32Next(snap, &te)) {
+    if (te.th32OwnerProcessID != pid) continue;
+    HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                          FALSE, te.th32ThreadID);
+    if (!h) continue;
+    PWSTR desc = nullptr;
+    if (SUCCEEDED(get_desc(h, &desc)) && desc) {
+      std::string name;
+      for (PWSTR c = desc; *c; ++c) name.push_back(char(*c));
+      LocalFree(desc);
+      if (name.find(needle) != std::string::npos) {
+        found_name = name;
+        result = h;
+        break;
+      }
+    }
+    CloseHandle(h);
+  }
+  CloseHandle(snap);
+  return result;
+}
+
+void Profile(const std::filesystem::path& dir, const std::filesystem::path& req, int n) {
+  std::ifstream in(req);
+  int seconds = 10;
+  std::string needle = "GPU Commands";
+  in >> seconds;
+  std::string rest;
+  std::getline(in, rest);
+  if (!rest.empty()) {
+    size_t a = rest.find_first_not_of(" 	");
+    if (a != std::string::npos) needle = rest.substr(a);
+  }
+  std::string thread_name;
+  HANDLE thread = FindThreadByName(needle, thread_name);
+  if (!thread) {
+    REXLOG_WARN("wet memtool: profile: no thread named like '{}'", needle);
+    return;
+  }
+  REXLOG_INFO("wet memtool: profiling thread '{}' for {} s", thread_name, seconds);
+  constexpr int kMaxFrames = 32;
+  std::map<DWORD64, uint32_t> self_pc, incl_pc;
+  uint64_t samples = 0, failed = 0;
+  HANDLE process = GetCurrentProcess();
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+  while (std::chrono::steady_clock::now() < end) {
+    DWORD64 frames[kMaxFrames];
+    int count = 0;
+    if (SuspendThread(thread) != DWORD(-1)) {
+      CONTEXT ctx{};
+      ctx.ContextFlags = CONTEXT_FULL;
+      if (GetThreadContext(thread, &ctx)) {
+        STACKFRAME64 frame{};
+        frame.AddrPC.Offset = ctx.Rip;
+        frame.AddrFrame.Offset = ctx.Rbp;
+        frame.AddrStack.Offset = ctx.Rsp;
+        frame.AddrPC.Mode = frame.AddrFrame.Mode = frame.AddrStack.Mode = AddrModeFlat;
+        while (count < kMaxFrames &&
+               StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread, &frame, &ctx, nullptr,
+                           SymFunctionTableAccess64, SymGetModuleBase64, nullptr) &&
+               frame.AddrPC.Offset) {
+          frames[count++] = frame.AddrPC.Offset;
+        }
+      }
+      ResumeThread(thread);
+    }
+    if (count) {
+      ++samples;
+      ++self_pc[frames[0]];
+      std::set<DWORD64> seen;
+      for (int i = 0; i < count; ++i) {
+        if (seen.insert(frames[i]).second) ++incl_pc[frames[i]];
+      }
+    } else {
+      ++failed;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(900));
+  }
+  CloseHandle(thread);
+
+  // The SDK DLL PDBs are not installed next to the DLLs; point dbghelp at the SDK build tree.
+  {
+    char exe[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe, sizeof(exe));
+    std::filesystem::path exe_dir = std::filesystem::path(exe).parent_path();
+    std::filesystem::path sdk_pdb = exe_dir / ".." / ".." / ".." / "third_party" / "rexglue-sdk" /
+                                    "out" / "win-amd64" / "RelWithDebInfo";
+    std::error_code ec;
+    std::string path = exe_dir.string() + ";" + std::filesystem::canonical(sdk_pdb, ec).string();
+    SymSetSearchPath(process, path.c_str());
+    SymRefreshModuleList(process);
+  }
+  auto symbolize = [&](DWORD64 pc) {
+    alignas(SYMBOL_INFO) char buf[sizeof(SYMBOL_INFO) + 512];
+    auto* sym = reinterpret_cast<SYMBOL_INFO*>(buf);
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen = 511;
+    DWORD64 disp = 0;
+    char module[MAX_PATH] = "?";
+    DWORD64 mod_base = SymGetModuleBase64(process, pc);
+    if (mod_base) {
+      GetModuleFileNameA(reinterpret_cast<HMODULE>(mod_base), module, sizeof(module));
+      if (const char* slash = strrchr(module, '\\')) memmove(module, slash + 1, strlen(slash));
+    }
+    std::string name = SymFromAddr(process, pc, &disp, sym) ? sym->Name : "?";
+    return std::string(module) + "!" + name;
+  };
+  // Merge per-pc counts by symbol so a function's samples are not split across offsets,
+  // but keep the inclusive count once per symbol per sample (approximated: inclusive per pc
+  // summed can overcount recursion; acceptable for hot-spot ranking).
+  std::map<std::string, uint32_t> self_sym, incl_sym;
+  for (auto& [pc, c] : self_pc) self_sym[symbolize(pc)] += c;
+  for (auto& [pc, c] : incl_pc) incl_sym[symbolize(pc)] += c;
+  auto top = [&](std::map<std::string, uint32_t>& m, size_t limit) {
+    std::vector<std::pair<uint32_t, std::string>> v;
+    for (auto& [k, c] : m) v.emplace_back(c, k);
+    std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    if (v.size() > limit) v.resize(limit);
+    return v;
+  };
+  std::filesystem::path out_path = dir / ("profile-" + std::to_string(n) + ".txt");
+  std::ofstream out(out_path);
+  auto line = [&](uint32_t c, const std::string& k) {
+    out << std::fixed << std::setprecision(1) << std::setw(6)
+        << 100.0 * c / std::max<uint64_t>(1, samples) << "%  " << c << "  " << k << "\n";
+  };
+  out << "thread: " << thread_name << "  samples: " << samples << "  failed: " << failed
+      << "  seconds: " << seconds << "\n\n== self (top of stack) ==\n";
+  for (auto& [c, k] : top(self_sym, 60)) line(c, k);
+  out << "\n== inclusive (anywhere on stack) ==\n";
+  for (auto& [c, k] : top(incl_sym, 80)) line(c, k);
+  REXLOG_INFO("wet memtool: profile written to {} ({} samples)", out_path.string(), samples);
+}
+
 void Worker(std::filesystem::path dir) {
   std::filesystem::create_directories(dir);
   int n = 0;
@@ -188,6 +345,12 @@ void Worker(std::filesystem::path dir) {
     if (std::filesystem::exists(dir / "poke.req", ec)) {
       Poke(dir / "poke.req");
       std::filesystem::remove(dir / "poke.req", ec);
+    }
+    if (std::filesystem::exists(dir / "profile.req", ec)) {
+      std::filesystem::path req = dir / "profile.req.active";
+      std::filesystem::rename(dir / "profile.req", req, ec);
+      Profile(dir, req, n++);
+      std::filesystem::remove(req, ec);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }

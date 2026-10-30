@@ -36,6 +36,12 @@ class WetApp : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     if (config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
     wet::display::ApplyStartupFlag();  // config is loaded by now; window not created yet
+    // Measured for Wet (NOTES.md, 2026-10-30): one CPU write invalidating a 4 KB page instead
+    // of a 256 KB block uploads ~22% less per frame with no visible game-thread cost.
+    if (rex::cvar::GetFlagSource("shared_memory_invalidate_block_log2") ==
+        rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("shared_memory_invalidate_block_log2", "12");
+    }
   }
 
   // SDK v0.10.0 defines --perf_log_csv but never applies it; open the per-frame CSV here.
