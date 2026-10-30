@@ -364,3 +364,10 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   draws now a flat 60. Upload cost left: ~1 ms of page re-protection. User saw no artifacts.
 - Next for frame rate: re-profile on the zero-copy build; candidates are the driver/command
   recording share, register-write path, texture cache hashing, and the protect calls.
+- Async submission (SDK patch 14, d3d12_async_submit): the deferred command list replay
+  measured 5.2 ms per heavy frame (cp_replay_us, ~6.7 submissions/frame; ExecuteCommandLists
+  itself 0.3 ms). A "GPU Submit" worker replays/executes/signals each submission in order while
+  the GPU Commands thread records the next; drained at swaps and shutdown. Result at 1600-2200
+  draws: GPU thread 15.7 -> 10.8 ms, frame 18.3 -> 17.1 ms (54.7 -> 58.3 fps). The remaining
+  excess is GPU-side (cp_fence_wait_us 2.6 ms) at 2x render scale. Batched page protection
+  (tried as a patch) measured nothing and was dropped. No visual issues in a few minutes of play.
