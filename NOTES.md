@@ -371,3 +371,14 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   draws: GPU thread 15.7 -> 10.8 ms, frame 18.3 -> 17.1 ms (54.7 -> 58.3 fps). The remaining
   excess is GPU-side (cp_fence_wait_us 2.6 ms) at 2x render scale. Batched page protection
   (tried as a patch) measured nothing and was dropped. No visual issues in a few minutes of play.
+- Streaming hitches (F2 marker + texture counters): a burst of ~262 new textures at an area
+  transition cost a 96 ms frame; CreateCommittedResource measured 221 us per texture (51 ms of
+  it). SDK patch 15 places textures in pooled 64 MB heaps (first-fit free lists, blocks freed on
+  texture destruction, which the cache only does after the last GPU use): creation 28 us avg,
+  burst frame 96 -> 44 ms. What is left of the hitch: the replay of that submission (16 ms,
+  per-texture barriers/dispatch/copy) and the GPU untiling ~50 MB through the single scratch
+  buffer (two frames of 40-52 ms fence waits). Batching the loads would be the next step.
+- At 2200+ draws the limit is now the D3D12 recording cost on the GPU Submit thread (~7 us per
+  draw, 15-27 ms replay per frame at 2x render scale) plus GPU time at 2x.
+- F2 writes a test marker (logs/marks.txt: n, time, perf CSV row); tools/analysis/wait_mark.py
+  waits for it, so test runs no longer need a typed "done".

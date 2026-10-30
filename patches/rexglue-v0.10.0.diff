@@ -92,6 +92,55 @@ index 5100818..c5c8780 100644
   private:
    D3D12CommandProcessor& command_processor_;
  
+diff --git a/include/rex/graphics/d3d12/texture_cache.h b/include/rex/graphics/d3d12/texture_cache.h
+index 4d845c7..4da2efd 100644
+--- a/include/rex/graphics/d3d12/texture_cache.h
++++ b/include/rex/graphics/d3d12/texture_cache.h
+@@ -13,6 +13,7 @@
+ 
+ #include <array>
+ #include <functional>
++#include <map>
+ #include <memory>
+ #include <unordered_map>
+ #include <utility>
+@@ -250,6 +251,15 @@ class D3D12TextureCache final : public TextureCache {
+                           ID3D12Resource* resource, D3D12_RESOURCE_STATES resource_state,
+                           bool track_usage = true);
+     ~D3D12Texture();
++    // wet-recomp patch: block in the texture heap pool this resource is placed in, if any.
++    void SetHeapBlock(size_t heap_index, uint64_t offset, uint64_t size) {
++      heap_index_ = heap_index;
++      heap_offset_ = offset;
++      heap_block_size_ = size;
++    }
++    size_t heap_index_ = SIZE_MAX;
++    uint64_t heap_offset_ = 0;
++    uint64_t heap_block_size_ = 0;
+ 
+     ID3D12Resource* resource() const { return resource_.Get(); }
+ 
+@@ -527,6 +537,20 @@ class D3D12TextureCache final : public TextureCache {
+                 "two 2 GB buffers");
+   // Resident portions of the tiled buffer.
+   std::vector<Microsoft::WRL::ComPtr<ID3D12Heap>> scaled_resolve_heaps_;
++
++  // wet-recomp patch: texture resources are placed in pooled heaps instead of committed
++  // (CreateCommittedResource measured 221 us per texture; a streaming burst of 262 textures
++  // cost a 51 ms frame). Blocks are returned when the texture is destroyed, which the cache
++  // only does once the texture's last submission has completed on the GPU.
++  struct TextureHeap {
++    Microsoft::WRL::ComPtr<ID3D12Heap> heap;
++    uint64_t size = 0;
++    std::map<uint64_t, uint64_t> free_blocks;  // offset -> size
++  };
++  std::vector<TextureHeap> texture_heaps_;
++  bool AllocateTextureHeapBlock(uint64_t size, uint64_t alignment, size_t& heap_index_out,
++                                uint64_t& offset_out);
++  void ReleaseTextureHeapBlock(size_t heap_index, uint64_t offset, uint64_t size);
+   // Number of currently resident portions of the tiled buffer, for profiling.
+   uint32_t scaled_resolve_heap_count_ = 0;
+   // Current scaled resolve state.
 diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
 index 1cb3faa..6e1d14e 100644
 --- a/include/rex/input/input_system.h
@@ -138,10 +187,10 @@ index c8751b7..4708456 100644
                               public rex::ui::WindowInputListener,
                               public rex::ui::WindowListener {
 diff --git a/include/rex/perf/counter.h b/include/rex/perf/counter.h
-index b3947e0..81b1722 100644
+index b3947e0..6fa3756 100644
 --- a/include/rex/perf/counter.h
 +++ b/include/rex/perf/counter.h
-@@ -49,6 +49,23 @@ enum class CounterId : uint16_t {
+@@ -49,6 +49,26 @@ enum class CounterId : uint16_t {
    kPipelineCacheHits,
    kPipelineCacheMisses,
  
@@ -161,6 +210,9 @@ index b3947e0..81b1722 100644
 +  kCpReplayUs,
 +  kCpExecuteUs,
 +  kCpSubmissions,
++  kTexturesCreated,
++  kTextureCreateUs,
++  kTextureLoadUs,
 +
    kCount  // sentinel -- must be last
  };
@@ -234,7 +286,7 @@ index 71e7473..baca310 100644
    bool WarpMouseToCenter(int32_t& x_out, int32_t& y_out) override;
  
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
-index 536009e..8dff152 100644
+index 536009e..bd58df7 100644
 --- a/src/core/perf/counter.cpp
 +++ b/src/core/perf/counter.cpp
 @@ -17,6 +17,9 @@
@@ -247,7 +299,7 @@ index 536009e..8dff152 100644
  #include <cstring>
  
  REXCVAR_DEFINE_STRING(perf_log_csv, "", "Perf",
-@@ -49,6 +52,21 @@ constexpr const char* kCounterNames[] = {
+@@ -49,6 +52,24 @@ constexpr const char* kCounterNames[] = {
      "texture_cache_misses",
      "pipeline_cache_hits",
      "pipeline_cache_misses",
@@ -266,10 +318,13 @@ index 536009e..8dff152 100644
 +    "cp_replay_us",
 +    "cp_execute_us",
 +    "cp_submissions",
++    "textures_created",
++    "texture_create_us",
++    "texture_load_us",
  };
  static_assert(std::size(kCounterNames) == kNumCounters, "kCounterNames must match CounterId enum");
  
-@@ -72,6 +90,21 @@ constexpr bool kIsGauge[] = {
+@@ -72,6 +93,24 @@ constexpr bool kIsGauge[] = {
      false,  // kTextureCacheMisses
      false,  // kPipelineCacheHits
      false,  // kPipelineCacheMisses
@@ -288,10 +343,13 @@ index 536009e..8dff152 100644
 +    false,  // kCpReplayUs      (deferred command list -> D3D12 command list)
 +    false,  // kCpExecuteUs     (ExecuteCommandLists + fence signal)
 +    false,  // kCpSubmissions
++    false,  // kTexturesCreated
++    false,  // kTextureCreateUs (CreateCommittedResource)
++    false,  // kTextureLoadUs   (CPU side of the untiling load)
  };
  static_assert(std::size(kIsGauge) == kNumCounters, "kIsGauge must match CounterId enum");
  
-@@ -137,7 +170,12 @@ void SetCsvLogPath(const std::string& path) {
+@@ -137,7 +176,12 @@ void SetCsvLogPath(const std::string& path) {
    if (path.empty())
      return;
  
@@ -827,6 +885,159 @@ index a5c97a0..642bb7a 100644
 +}
 +
  }  // namespace rex::graphics::d3d12
+diff --git a/src/graphics/d3d12/texture_cache.cpp b/src/graphics/d3d12/texture_cache.cpp
+index 2be0e8e..caa754d 100644
+--- a/src/graphics/d3d12/texture_cache.cpp
++++ b/src/graphics/d3d12/texture_cache.cpp
+@@ -9,6 +9,8 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/cvar.h>
++#include <rex/chrono/clock.h>
+ #include <algorithm>
+ #include <array>
+ #include <cfloat>
+@@ -32,6 +34,13 @@
+ #include <rex/ui/d3d12/d3d12_upload_buffer_pool.h>
+ #include <rex/ui/d3d12/d3d12_util.h>
+ 
++// wet-recomp patch: see D3D12TextureCache::AllocateTextureHeapBlock.
++REXCVAR_DEFINE_BOOL(d3d12_texture_heap_pool, true, "GPU",
++                    "Place texture resources in pooled 64 MB heaps instead of creating a committed "
++                    "resource per texture (much cheaper creation during texture streaming)");
++REXCVAR_DEFINE_INT32(d3d12_texture_heap_size_mb, 64, "GPU", "Texture heap pool heap size in MB")
++    .range(16, 1024);
++
+ namespace rex::graphics::d3d12 {
+ 
+ // Generated with `xb buildshaders`.
+@@ -385,6 +394,7 @@ D3D12TextureCache::~D3D12TextureCache() {
+   }
+   scaled_resolve_heaps_.clear();
+   COUNT_profile_set("gpu/texture_cache/scaled_resolve_buffer_used_mb", 0);
++  texture_heaps_.clear();  // wet-recomp patch (all textures are destroyed above)
+ }
+ 
+ bool D3D12TextureCache::Initialize() {
+@@ -1427,6 +1437,76 @@ D3D12TextureCache::D3D12Texture::~D3D12Texture() {
+   for (const auto& descriptor_pair : srv_descriptors_) {
+     d3d12_texture_cache.ReleaseTextureDescriptor(descriptor_pair.second);
+   }
++  if (heap_index_ != SIZE_MAX) {  // wet-recomp patch
++    resource_.Reset();  // the placed resource goes before its block is reusable
++    d3d12_texture_cache.ReleaseTextureHeapBlock(heap_index_, heap_offset_, heap_block_size_);
++  }
++}
++
++// wet-recomp patch: first-fit allocation in pooled heaps.
++bool D3D12TextureCache::AllocateTextureHeapBlock(uint64_t size, uint64_t alignment,
++                                                 size_t& heap_index_out, uint64_t& offset_out) {
++  alignment = std::max<uint64_t>(alignment, 1);
++  for (size_t i = 0; i < texture_heaps_.size(); ++i) {
++    TextureHeap& heap = texture_heaps_[i];
++    for (auto it = heap.free_blocks.begin(); it != heap.free_blocks.end(); ++it) {
++      const uint64_t block_offset = it->first;
++      const uint64_t block_end = block_offset + it->second;
++      const uint64_t aligned = (block_offset + alignment - 1) / alignment * alignment;
++      if (aligned + size > block_end) continue;
++      // Split: [block_offset, aligned) stays free, [aligned, aligned+size) is taken,
++      // [aligned+size, block_end) stays free.
++      heap.free_blocks.erase(it);
++      if (aligned > block_offset) heap.free_blocks.emplace(block_offset, aligned - block_offset);
++      if (aligned + size < block_end) heap.free_blocks.emplace(aligned + size, block_end - aligned - size);
++      heap_index_out = i;
++      offset_out = aligned;
++      return true;
++    }
++  }
++  // New heap.
++  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
++  const uint64_t heap_size = std::max<uint64_t>(
++      uint64_t(REXCVAR_GET(d3d12_texture_heap_size_mb)) << 20,
++      (size + alignment + (UINT64_C(1) << 16) - 1) & ~((UINT64_C(1) << 16) - 1));
++  D3D12_HEAP_DESC heap_desc = {};
++  heap_desc.SizeInBytes = heap_size;
++  heap_desc.Properties = ui::d3d12::util::kHeapPropertiesDefault;
++  heap_desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
++  heap_desc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES | provider.GetHeapFlagCreateNotZeroed();
++  Microsoft::WRL::ComPtr<ID3D12Heap> heap;
++  if (FAILED(provider.GetDevice()->CreateHeap(&heap_desc, IID_PPV_ARGS(&heap)))) {
++    REXGPU_WARN("Texture heap pool: failed to create a {} MB heap", heap_size >> 20);
++    return false;
++  }
++  TextureHeap& new_heap = texture_heaps_.emplace_back();
++  new_heap.heap = std::move(heap);
++  new_heap.size = heap_size;
++  new_heap.free_blocks.emplace(size, heap_size - size);  // the first block is taken at offset 0
++  heap_index_out = texture_heaps_.size() - 1;
++  offset_out = 0;
++  REXGPU_INFO("Texture heap pool: {} MB heap {} created", heap_size >> 20, heap_index_out);
++  return true;
++}
++
++void D3D12TextureCache::ReleaseTextureHeapBlock(size_t heap_index, uint64_t offset, uint64_t size) {
++  if (heap_index >= texture_heaps_.size()) return;
++  auto& free_blocks = texture_heaps_[heap_index].free_blocks;
++  auto next = free_blocks.lower_bound(offset);
++  // Merge with the following block.
++  if (next != free_blocks.end() && next->first == offset + size) {
++    size += next->second;
++    next = free_blocks.erase(next);
++  }
++  // Merge with the preceding block.
++  if (next != free_blocks.begin()) {
++    auto prev = std::prev(next);
++    if (prev->first + prev->second == offset) {
++      prev->second += size;
++      return;
++    }
++  }
++  free_blocks.emplace(offset, size);
+ }
+ 
+ bool D3D12TextureCache::IsDecompressionNeeded(xenos::TextureFormat format, uint32_t width,
+@@ -1549,12 +1629,38 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureK
+   // Assuming untiling will be the next operation.
+   D3D12_RESOURCE_STATES resource_state = D3D12_RESOURCE_STATE_COPY_DEST;
+   Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+-  if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
++  const uint64_t create_t0 = rex::chrono::Clock::QueryHostTickCount();  // wet-recomp patch
++  size_t heap_index = SIZE_MAX;
++  uint64_t heap_offset = 0, heap_block_size = 0;
++  if (REXCVAR_GET(d3d12_texture_heap_pool)) {
++    const D3D12_RESOURCE_ALLOCATION_INFO allocation_info =
++        device->GetResourceAllocationInfo(0, 1, &desc);
++    // Keep very large textures committed so one does not pin a whole pool heap.
++    if (allocation_info.SizeInBytes <= (uint64_t(REXCVAR_GET(d3d12_texture_heap_size_mb)) << 20) / 4 &&
++        AllocateTextureHeapBlock(allocation_info.SizeInBytes, allocation_info.Alignment, heap_index,
++                                 heap_offset)) {
++      heap_block_size = allocation_info.SizeInBytes;
++      if (FAILED(device->CreatePlacedResource(texture_heaps_[heap_index].heap.Get(), heap_offset,
++                                              &desc, resource_state, nullptr,
++                                              IID_PPV_ARGS(&resource)))) {
++        ReleaseTextureHeapBlock(heap_index, heap_offset, heap_block_size);
++        heap_index = SIZE_MAX;
++        resource.Reset();
++      }
++    }
++  }
++  if (!resource &&
++      FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
+                                              provider.GetHeapFlagCreateNotZeroed(), &desc,
+                                              resource_state, nullptr, IID_PPV_ARGS(&resource)))) {
+     return nullptr;
+   }
+-  return std::unique_ptr<Texture>(new D3D12Texture(*this, key, resource.Get(), resource_state));
++  PERF_counter_add(kTexturesCreated, 1);
++  PERF_counter_add(kTextureCreateUs, int64_t((rex::chrono::Clock::QueryHostTickCount() - create_t0) *
++                                             1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
++  D3D12Texture* texture = new D3D12Texture(*this, key, resource.Get(), resource_state);
++  if (heap_index != SIZE_MAX) texture->SetHeapBlock(heap_index, heap_offset, heap_block_size);
++  return std::unique_ptr<Texture>(texture);
+ }
+ 
+ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, bool load_base,
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
 index 8f2fcb0..66fb7a6 100644
 --- a/src/graphics/graphics_system.cpp
@@ -898,6 +1109,32 @@ index 8f2fcb0..66fb7a6 100644
          return 0;
        }));
    // TODO: set_can_debugger_suspend not yet ported
+diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
+index 76f5600..69837ff 100644
+--- a/src/graphics/pipeline/texture/cache.cpp
++++ b/src/graphics/pipeline/texture/cache.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/perf/counter.h>
+ #include <algorithm>
+ #include <cstdint>
+ #include <utility>
+@@ -435,10 +436,13 @@ bool TextureCache::CommitPreparedTextureLoad(const PendingTextureLoad& pending_l
+     }
+   }
+ 
++  const uint64_t load_t0 = rex::chrono::Clock::QueryHostTickCount();  // wet-recomp patch
+   if (!LoadTextureDataFromResidentMemoryImpl(texture, pending_load.load_base,
+                                              pending_load.load_mips)) {
+     return false;
+   }
++  PERF_counter_add(kTextureLoadUs, int64_t((rex::chrono::Clock::QueryHostTickCount() - load_t0) *
++                                           1000000 / rex::chrono::Clock::QueryHostTickFrequency()));
+ 
+   // Mark the ranges as uploaded and watch them. This is needed for scaled
+   // resolves as well to detect when the CPU wants to reuse the memory for a
 diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
 index ec0df7c..e7edd9a 100644
 --- a/src/graphics/shared_memory.cpp

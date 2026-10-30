@@ -18,7 +18,13 @@
 
 #include <rex/ui/keybinds.h>
 
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
 REXCVAR_DECLARE(std::string, perf_log_csv);
+REXCVAR_DECLARE(std::string, log_file);
 
 class WetApp : public rex::ReXApp {
  public:
@@ -75,6 +81,27 @@ class WetApp : public rex::ReXApp {
         controls_menu_ = new wet::ui::ControlsMenu(controls_drawer_, config_path_,
                                                    [this] { controls_menu_ = nullptr; });
       }
+    });
+    // Test marker: appends "<n> <local time> <perf CSV rows>" to logs/marks.txt (next to the
+    // perf CSV, or the log file) so a test session can be delimited from in-game and the
+    // frame log cut at the mark instead of reporting "done" by hand.
+    rex::ui::RegisterBind("bind_wet_mark", "F2", "Write a test marker (logs/marks.txt)", [this] {
+      static int mark_count = 0;
+      const std::string csv = REXCVAR_GET(perf_log_csv);
+      std::filesystem::path dir = csv.empty() ? std::filesystem::path(REXCVAR_GET(log_file)).parent_path()
+                                              : std::filesystem::path(csv).parent_path();
+      size_t rows = 0;
+      if (!csv.empty()) {
+        std::ifstream in(csv, std::ios::binary);
+        std::string line;
+        while (std::getline(in, line)) ++rows;
+      }
+      const std::time_t now = std::time(nullptr);
+      char stamp[32];
+      std::strftime(stamp, sizeof(stamp), "%H:%M:%S", std::localtime(&now));
+      std::ofstream out(dir / "marks.txt", std::ios::app);
+      out << ++mark_count << " " << stamp << " " << rows << "\n";
+      REXLOG_INFO("wet: mark {} at {} (perf rows {})", mark_count, stamp, rows);
     });
   }
 
