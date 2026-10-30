@@ -42,6 +42,13 @@ class WetApp : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     if (config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
     wet::display::ApplyStartupFlag();  // config is loaded by now; window not created yet
+    // Port defaults for GPU plugin cvars (registered later, when the plugin loads; SDK patch 17
+    // keeps them pending until then; wet.toml and the command line override them).
+    // Measured for Wet (NOTES.md, 2026-10-30): a CPU write invalidating a 4 KB page instead of a
+    // 256 KB block uploads ~22% less per frame; a plain 512 MB shared-memory buffer avoids
+    // ~13 ms of tile-mapping updates on texture streaming bursts.
+    rex::cvar::SetDefaultOverride("shared_memory_invalidate_block_log2", "12");
+    rex::cvar::SetDefaultOverride("d3d12_tiled_shared_memory", "false");
   }
 
   // SDK v0.10.0 defines --perf_log_csv but never applies it; open the per-frame CSV here.
@@ -54,22 +61,7 @@ class WetApp : public rex::ReXApp {
                   int(rex::cvar::GetFlagSource(n)));
   }
 
-  void OnPostSetup() override {
-    // GPU plugin cvars exist only once the plugin DLL is loaded (not yet in OnPreSetup).
-    // Measured for Wet (NOTES.md, 2026-10-30): one CPU write invalidating a 4 KB page instead
-    // of a 256 KB block uploads ~22% less per frame with no visible game-thread cost.
-    if (rex::cvar::GetFlagSource("shared_memory_invalidate_block_log2") ==
-        rex::cvar::Source::kDefault) {
-      if (!rex::cvar::SetFlagByName("shared_memory_invalidate_block_log2", "12"))
-        REXLOG_WARN("wet: could not set shared_memory_invalidate_block_log2");
-    }
-    // A plain 512 MB shared-memory buffer instead of a tiled one: texture streaming bursts
-    // spent ~13 ms per frame on tile-mapping updates (NOTES.md, 2026-10-30).
-    if (rex::cvar::GetFlagSource("d3d12_tiled_shared_memory") == rex::cvar::Source::kDefault) {
-      rex::cvar::SetFlagByName("d3d12_tiled_shared_memory", "false");
-    }
-    wet::memtool::StartIfEnabled();
-  }
+  void OnPostSetup() override { wet::memtool::StartIfEnabled(); }
 
   void OnConfigurePaths(rex::PathConfig& paths) override { config_path_ = paths.config_path; }
 

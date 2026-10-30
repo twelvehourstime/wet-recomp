@@ -1,3 +1,20 @@
+diff --git a/include/rex/cvar.h b/include/rex/cvar.h
+index fe94186..ed4df46 100644
+--- a/include/rex/cvar.h
++++ b/include/rex/cvar.h
+@@ -191,6 +191,12 @@ void UnregisterFlag(std::string_view name);
+ 
+ bool SetFlagByName(std::string_view name, std::string_view value);
+ 
++// wet-recomp patch: an application default for a cvar that may not be registered yet (GPU
++// plugin cvars are defined when the plugin loads, after the config file was read). Applied as
++// a Config-source value, or kept pending for the registration; a value from the config file
++// or the command line always wins over it.
++bool SetDefaultOverride(std::string_view name, std::string_view value);
++
+ // Applies a value parsed off the command line. Returns false only when the
+ // value is rejected (unparseable, or outside the flag's constraints); a value
+ // skipped because a higher-priority source already won returns true.
 diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
 index 96d362b..30ab825 100644
 --- a/include/rex/graphics/d3d12/command_processor.h
@@ -300,6 +317,32 @@ index 71e7473..baca310 100644
    bool SetRelativeMouseMode(bool enable) override;
    bool WarpMouseToCenter(int32_t& x_out, int32_t& y_out) override;
  
+diff --git a/src/core/cvar.cpp b/src/core/cvar.cpp
+index 228728d..6ba3c12 100644
+--- a/src/core/cvar.cpp
++++ b/src/core/cvar.cpp
+@@ -343,6 +343,21 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
+   return SetFlagFromSource(name, value, Source::kRuntime) == ApplyResult::kApplied;
+ }
+ 
++// wet-recomp patch
++bool SetDefaultOverride(std::string_view name, std::string_view value) {
++  {
++    std::lock_guard lock(GetRegistryMutex());
++    if (GetRegistryIndex().find(std::string(name)) == GetRegistryIndex().end()) {
++      PendingValues& pending = GetPendingValuesStorage()[std::string(name)];
++      if (!pending.config && !pending.cmdline) {
++        pending.config = std::string(value);
++      }
++      return true;
++    }
++  }
++  return SetFlagFromSource(name, value, Source::kConfig) != ApplyResult::kRejected;
++}
++
+ bool SetFlagFromCommandLine(std::string_view name, std::string_view value) {
+   return SetFlagFromSource(name, value, Source::kCommandLine) != ApplyResult::kRejected;
+ }
 diff --git a/src/core/perf/counter.cpp b/src/core/perf/counter.cpp
 index 536009e..025f43d 100644
 --- a/src/core/perf/counter.cpp
