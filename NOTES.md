@@ -392,3 +392,9 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   512 MB shared-memory buffer (no tile mappings) saved 13 ms on the burst frame: port default.
   The SDK uses the ROV EDRAM path (render_target_path_d3d12 unset); the RTV path is the next
   thing to try for the 2x GPU cost.
+- Hair trailing the body by a frame (user noticed 2026-10-30 evening): caused by zero-copy
+  uploads (patch 13) - the GPU read the per-frame hair vertex data when the copy executed, a
+  frame or more behind the game thread with async submission. Confirmed by the flag; default is
+  now off (CPU snapshot copy at record time, ~3.5 ms on the heaviest frames, 3 copy threads).
+  Lesson: "the console GPU also reads later" was wrong for this data; the game relies on the
+  emulator's snapshot timing. RTV render-target path: no GPU gain over ROV at 2x (19.0 vs 17.7 ms).

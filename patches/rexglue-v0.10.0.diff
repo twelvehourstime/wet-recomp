@@ -769,7 +769,7 @@ index 8e6b854..a1fc14e 100644
  
    // Perform translation.
 diff --git a/src/graphics/d3d12/shared_memory.cpp b/src/graphics/d3d12/shared_memory.cpp
-index a5c97a0..642bb7a 100644
+index a5c97a0..b458fb6 100644
 --- a/src/graphics/d3d12/shared_memory.cpp
 +++ b/src/graphics/d3d12/shared_memory.cpp
 @@ -9,6 +9,13 @@
@@ -786,14 +786,17 @@ index a5c97a0..642bb7a 100644
  #include <cstring>
  #include <utility>
  #include <vector>
-@@ -25,6 +32,15 @@ REXCVAR_DEFINE_BOOL(d3d12_tiled_shared_memory, true, "GPU/D3D12",
+@@ -25,6 +32,18 @@ REXCVAR_DEFINE_BOOL(d3d12_tiled_shared_memory, true, "GPU/D3D12",
                      "Use tiled shared memory on D3D12")
      .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
  
 +// wet-recomp patch: see D3D12SharedMemory::RunUploadCopyJobs.
-+REXCVAR_DEFINE_BOOL(shared_memory_gpu_read_guest, true, "GPU",
++REXCVAR_DEFINE_BOOL(shared_memory_gpu_read_guest, false, "GPU",
 +                    "Upload guest memory to the GPU shared buffer by GPU copies from a D3D12 heap "
-+                    "opened over guest memory (no CPU copy); off = CPU copies through upload buffers");
++                    "opened over guest memory (no CPU copy). The GPU then reads the memory when "
++                    "the copy executes, which is later than the CPU snapshot the game may rely on "
++                    "(Wet: per-frame hair vertex data lagged the body by a frame). Off = CPU copies "
++                    "through upload buffers, taken when the draw is recorded");
 +
 +REXCVAR_DEFINE_INT32(shared_memory_upload_threads, 3, "GPU",
 +                     "Worker threads that copy guest memory into GPU upload buffers alongside the GPU command thread (0 = copy on the command thread only, the original behaviour)")
@@ -802,7 +805,7 @@ index a5c97a0..642bb7a 100644
  namespace rex::graphics::d3d12 {
  
  D3D12SharedMemory::D3D12SharedMemory(D3D12CommandProcessor& command_processor,
-@@ -81,6 +97,76 @@ bool D3D12SharedMemory::Initialize() {
+@@ -81,6 +100,76 @@ bool D3D12SharedMemory::Initialize() {
    buffer_gpu_address_ = buffer_->GetGPUVirtualAddress();
    buffer_uav_writes_commit_needed_ = false;
  
@@ -879,7 +882,7 @@ index a5c97a0..642bb7a 100644
    D3D12_DESCRIPTOR_HEAP_DESC buffer_descriptor_heap_desc;
    buffer_descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
    buffer_descriptor_heap_desc.NumDescriptors = uint32_t(BufferDescriptorIndex::kCount);
-@@ -143,6 +229,8 @@ bool D3D12SharedMemory::Initialize() {
+@@ -143,6 +232,8 @@ bool D3D12SharedMemory::Initialize() {
  
  void D3D12SharedMemory::Shutdown(bool from_destructor) {
    upload_buffer_pool_.reset();
@@ -888,7 +891,7 @@ index a5c97a0..642bb7a 100644
  
    ui::d3d12::util::ReleaseAndNull(buffer_descriptor_heap_);
  
-@@ -306,12 +394,31 @@ bool D3D12SharedMemory::UploadRanges(
+@@ -306,12 +397,31 @@ bool D3D12SharedMemory::UploadRanges(
    if (upload_page_ranges.empty()) {
      return true;
    }
@@ -920,7 +923,7 @@ index a5c97a0..642bb7a 100644
      while (upload_range_length != 0) {
        ID3D12Resource* upload_buffer;
        size_t upload_buffer_offset, upload_buffer_size;
-@@ -324,9 +431,16 @@ bool D3D12SharedMemory::UploadRanges(
+@@ -324,9 +434,16 @@ bool D3D12SharedMemory::UploadRanges(
          return false;
        }
        MakeRangeValid(upload_range_start << page_size_log2(), uint32_t(upload_buffer_size), false);
@@ -940,7 +943,7 @@ index a5c97a0..642bb7a 100644
        command_list.D3DCopyBufferRegion(buffer_, upload_range_start << page_size_log2(),
                                         upload_buffer, UINT64(upload_buffer_offset),
                                         UINT64(upload_buffer_size));
-@@ -335,7 +449,92 @@ bool D3D12SharedMemory::UploadRanges(
+@@ -335,7 +452,92 @@ bool D3D12SharedMemory::UploadRanges(
        upload_range_length -= upload_buffer_pages;
      }
    }
