@@ -390,8 +390,8 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   textures are, not how many (texture_load_host_bytes added to check for expansion on load).
   Batched texture loads measured worse on the GPU (99 -> 177 ms) and were dropped. The plain
   512 MB shared-memory buffer (no tile mappings) saved 13 ms on the burst frame: port default.
-  The SDK uses the ROV EDRAM path (render_target_path_d3d12 unset); the RTV path is the next
-  thing to try for the 2x GPU cost.
+  (Correction 2026-10-31: with render_target_path_d3d12 unset the SDK already picks the host
+  render target (RTV) path on non-Intel GPUs, so the "RTV path" test below changed nothing.)
 - Hair trailing the body by a frame (user noticed 2026-10-30 evening): caused by zero-copy
   uploads (patch 13) - the GPU read the per-frame hair vertex data when the copy executed, a
   frame or more behind the game thread with async submission. Confirmed by the flag; default is
@@ -400,5 +400,39 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   emulator's snapshot timing. RTV render-target path: no GPU gain over ROV at 2x (19.0 vs 17.7 ms).
 - 2x render scale GPU cost: gamma_render_target_as_unorm16=false and native_2x_msaa=false
   changed nothing (GPU 19.0 vs 18.9 ms at 1600-2200 draws), like the RTV path. The GPU time at
-  2x is the game's own shading at 4x pixels; 1x holds a locked 60. Remaining 2x options are
-  structural (live resolution switching) - not pursued.
+  2x was wrongly read as the game's own shading - see 2026-10-31: it was per-draw barrier
+  drains, fixed by batched uploads (SDK patch 19).
+
+## 2026-10-31 - GPU time at 2x: per-draw barriers, batched uploads
+
+- Question of the day: was "render at 720p" the fix? No. What the 2x GPU time was:
+  - GPU clocks were the first suspect: nvidia-smi showed the RTX 3090 in P8 at 210 MHz, 11-20%
+    busy, while the game held 60 at 1x (vsync-paced bursts never raise the driver's clock
+    target). With a "Prefer maximum performance" profile for wet.exe (user-set in the NVIDIA
+    Control Panel) the card held 1935 MHz - and the heavy bands were no faster (2000-2199
+    draws: 19.5 -> 21.8 ms GPU). Clocks were not it. The profile is still worth keeping for
+    latency; the port does not set it (would need NvAPI DRS writes to the driver profile store).
+  - Two facts pointed elsewhere: GPU time barely scales with pixels (720p 14.8 ms vs 1440p
+    21.7 ms at 2000 draws) and nvidia-smi utilization was ~50% while the GPU timeline was full,
+    i.e. the GPU idles inside the command list. SDK patch 18 added per-frame counters
+    (shared_mem_upload_calls, barrier_calls, barrier_count, render_target_sets, pipeline_sets):
+    at 2000-2199 draws, 2430 upload batches and 3114 ResourceBarrier commands per frame, one
+    pair per draw (render-target and pipeline switches: 55 / 316, flat). Every draw with new
+    vertex data transitioned the 512 MB shared buffer to COPY_DEST, copied, and transitioned
+    back: two full pipeline drains per draw, ~7 us of GPU time per pair.
+- SDK patch 19 (shared_memory_batch_uploads, default on): a submission's uploads are recorded
+  into a separate deferred list executed at the head of the submission's command list inside a
+  single transition pair (both the sync path and the GPU Submit worker run it first). Hazard
+  rule: a per-submission page bitmap marks every page the GPU reads (RequestRanges), uploads or
+  writes (RangeWrittenByGpu, new OnPagesAccessedByGpu hook); an upload touching an
+  already-marked page stays inline, so no earlier access of the submission can observe newer
+  data (the hair-lag lesson from patch 13). D3D12SharedMemory::BeginSubmission is now actually
+  called by the command processor (it was never wired up).
+- Result at 2x render scale (logs/perf-2x-barriers.csv -> logs/perf-2x-batched.csv, 9169
+  frames): barrier commands per frame 3114 -> 144; GPU time 1600-1799 draws 18.0 -> 10.5 ms,
+  2000-2199 draws 21.6 -> 10.6 ms (p99 14.7 ms above 1600 draws); frames over 18 ms in the
+  2000-2199 band 98.7% -> 4.4% (the same ~5% baseline every band and the menu show). Inline
+  fallback: 212 of 9169 frames, never more than one per frame. User: "seems to run much better
+  now"; no visual issues reported so far (watch hair, shadows, reflections).
+- The ~5% of frames over 18 ms in every band, menu included, is the next frame-rate item; it
+  is not GPU work (0.6 ms GPU in the menu).
