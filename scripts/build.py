@@ -52,6 +52,24 @@ def run(cmd, **kw):
     subprocess.run(cmd, check=True, env=tool_env(), **kw)
 
 
+def drop_moved_build_dir(build_dir, source_dir):
+    """Delete a CMake build folder configured for another location (the folder was moved).
+
+    CMake refuses to reuse a cache made for a different source path, so a moved install
+    would otherwise fail to update.
+    """
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.exists():
+        return
+    for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("CMAKE_HOME_DIRECTORY:"):
+            recorded = Path(line.split("=", 1)[1].strip())
+            if os.path.normcase(os.path.abspath(recorded)) != os.path.normcase(str(source_dir.resolve())):
+                print(f"build.py: {build_dir} was configured for {recorded}; starting it fresh")
+                shutil.rmtree(build_dir)
+            return
+
+
 def ensure_sdk_source():
     """Clone the pinned SDK if missing and apply patches/rexglue-<tag>.diff once."""
     if not SDK_DIR.exists():
@@ -69,6 +87,7 @@ def build_sdk(args):
     build_dir = SDK_DIR / "out" / "build" / SDK_PRESET
     if args.clean and build_dir.exists():
         shutil.rmtree(build_dir)
+    drop_moved_build_dir(build_dir, SDK_DIR)
     run(["cmake", "--preset", SDK_PRESET,
          f"-DCMAKE_C_COMPILER={LLVM_BIN / 'clang.exe'}",
          f"-DCMAKE_CXX_COMPILER={LLVM_BIN / 'clang++.exe'}"], cwd=SDK_DIR)
@@ -84,6 +103,7 @@ def build_game(args):
     build_dir = ROOT / "out" / "build" / preset
     if args.clean and build_dir.exists():
         shutil.rmtree(build_dir)
+    drop_moved_build_dir(build_dir, ROOT)
     sdk_install = SDK_DIR / "out" / "install" / SDK_PRESET
     if not sdk_install.exists():
         sys.exit("build.py: SDK not installed; run `python scripts/build.py sdk` first")
