@@ -46,7 +46,7 @@
 #include <vector>
 
 REXCVAR_DEFINE_BOOL(wet_memtool, false, "Wet/Debug", "Enable the guest memory dump/poke tool");
-REXCVAR_DEFINE_STRING(wet_memtool_dir, "E:/WET/work/memtool", "Wet/Debug",
+REXCVAR_DEFINE_STRING(wet_memtool_dir, "memtool", "Wet/Debug",
                       "Directory watched by the memory tool for dump.req / poke.req");
 
 namespace wet::memtool {

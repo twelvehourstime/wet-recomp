@@ -21,7 +21,8 @@ SDK_DIR = ROOT / "third_party" / "rexglue-sdk"
 SDK_REPO = "https://github.com/rexglue/rexglue-sdk.git"
 SDK_TAG = "v0.10.0"
 SDK_PRESET = "win-amd64"
-LLVM_BIN = Path(r"C:\Program Files\LLVM\bin")
+# Set the LLVM_BIN environment variable if LLVM is installed somewhere else.
+LLVM_BIN = Path(os.environ.get("LLVM_BIN", r"C:\Program Files\LLVM\bin"))
 
 # Lower-case image names that mean "the game is running".
 GAME_PROCESSES = {"wet.exe", "wet-recomp.exe", "xenia_canary.exe", "xenia.exe"}
