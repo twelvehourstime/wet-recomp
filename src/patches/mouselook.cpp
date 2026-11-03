@@ -29,7 +29,7 @@
 
 REXCVAR_DEFINE_BOOL(wet_raw_mouse, true, "Wet/Input",
                     "Apply mouse motion to the camera 1:1 (off: SDK mouse-as-right-stick)");
-REXCVAR_DEFINE_DOUBLE(wet_mouse_sensitivity, 0.05, "Wet/Input",
+REXCVAR_DEFINE_DOUBLE(wet_mouse_sensitivity, 0.085, "Wet/Input",
                       "Camera degrees per mouse count")
     .range(0.001, 2.0);
 REXCVAR_DEFINE_BOOL(wet_mouse_invert_y, false, "Wet/Input", "Invert mouse vertical look");

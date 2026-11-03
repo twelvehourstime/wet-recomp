@@ -16,6 +16,7 @@
 #include "ui/controls_menu.h"
 
 #include "input/pad_remap.h"
+#include "input_defaults.h"
 #include "ui/display_mode.h"
 
 #include <rex/cvar.h>
@@ -44,10 +45,10 @@ REXCVAR_DEFINE_STRING(wet_action_A, "Jump", "Wet/Actions", "In-game action of A"
 REXCVAR_DEFINE_STRING(wet_action_B, "Slide", "Wet/Actions", "In-game action of B");
 REXCVAR_DEFINE_STRING(wet_action_X, "Melee", "Wet/Actions", "In-game action of X");
 REXCVAR_DEFINE_STRING(wet_action_Y, "Action", "Wet/Actions", "In-game action of Y");
-REXCVAR_DEFINE_STRING(wet_action_LB, "Wall Run", "Wet/Actions", "In-game action of LB");
-REXCVAR_DEFINE_STRING(wet_action_RB, "Shoot", "Wet/Actions", "In-game action of RB");
-REXCVAR_DEFINE_STRING(wet_action_LT, "", "Wet/Actions", "In-game action of LT");
-REXCVAR_DEFINE_STRING(wet_action_RT, "", "Wet/Actions", "In-game action of RT");
+REXCVAR_DEFINE_STRING(wet_action_LB, "", "Wet/Actions", "In-game action of LB");
+REXCVAR_DEFINE_STRING(wet_action_RB, "", "Wet/Actions", "In-game action of RB");
+REXCVAR_DEFINE_STRING(wet_action_LT, "Wall Run", "Wet/Actions", "In-game action of LT");
+REXCVAR_DEFINE_STRING(wet_action_RT, "Shoot", "Wet/Actions", "In-game action of RT");
 REXCVAR_DEFINE_STRING(wet_action_Back, "Move List", "Wet/Actions", "In-game action of Back");
 REXCVAR_DEFINE_STRING(wet_action_Start, "Pause", "Wet/Actions", "In-game action of Start");
 REXCVAR_DEFINE_STRING(wet_action_LS, "", "Wet/Actions", "In-game action of left stick click");
@@ -286,6 +287,7 @@ void ControlsMenu::DrawKeyboardTab() {
   if (ImGui::Button("Reset keyboard & mouse to defaults")) {
     for (const auto& row : kKeyRows) rex::cvar::ResetToDefault(row.cvar);
     for (const char* c : kMouseCvars) rex::cvar::ResetToDefault(c);
+    wet::ApplyInputDefaults();  // back to the port's defaults, not the SDK's
     status_ = "Keyboard & mouse reset (not saved yet)";
   }
 }

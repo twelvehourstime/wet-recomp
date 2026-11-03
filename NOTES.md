@@ -436,3 +436,16 @@ lines from the function start (labels verify the count); scratch script /tmp/add
   now"; no visual issues reported so far (watch hair, shadows, reflections).
 - The ~5% of frames over 18 ms in every band, menu included, is the next frame-rate item; it
   is not GPU work (0.6 ms GPU in the menu).
+
+## 2026-11-03 - Publishing and installer
+
+- Published as github.com/twelvehourstime/wet-recomp (public). A prebuilt wet.exe is not
+  released because it contains the game's translated code; the release is an installer that
+  builds on the player's machine from their own ISO (installer/, scripts/make_release.py).
+- Clean-tree test found two bugs: generated sources are read at configure time but codegen runs
+  in the build (build.py now runs wet_codegen and reconfigures on a clean tree), and a moved
+  tree breaks the CMake cache (build.py starts such a build folder fresh).
+- wet.exe finds "game" next to or above its folder when --game_data_root is not given.
+- Default layout: RT LMB (Shoot), LT Shift (Wall Run), X RMB, B Control, Y E, D-pad arrows.
+  Right stick camera keys are cleared (they defaulted to the arrows). Mouse speed 0.085.
+- Not tested: the ISO file picker and the winget tool installs on a machine missing them.
