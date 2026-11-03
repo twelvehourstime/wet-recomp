@@ -63,7 +63,21 @@ class WetApp : public rex::ReXApp {
 
   void OnPostSetup() override { wet::memtool::StartIfEnabled(); }
 
-  void OnConfigurePaths(rex::PathConfig& paths) override { config_path_ = paths.config_path; }
+  void OnConfigurePaths(rex::PathConfig& paths) override {
+    config_path_ = paths.config_path;
+    // Installed layout (installer/Install-Wet.ps1): the game files sit in "game" next to the
+    // executable's folder or inside it, so wet.exe starts without --game_data_root.
+    if (paths.game_data_root.empty()) {
+      const std::filesystem::path exe_dir = paths.config_path.parent_path();
+      for (const auto& candidate : {exe_dir / "game", exe_dir.parent_path() / "game"}) {
+        std::error_code ec;
+        if (std::filesystem::exists(candidate / "default.xex", ec)) {
+          paths.game_data_root = candidate;
+          break;
+        }
+      }
+    }
+  }
 
   // Controls menu (keyboard/mouse and controller bindings), toggled with F1.
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
