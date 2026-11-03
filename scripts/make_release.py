@@ -42,7 +42,10 @@ def main():
     count = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for name in ("Install-Wet.bat", "Install-Wet.ps1", "README.txt"):
-            z.write(ROOT / "installer" / name, f"{top}/{name}")
+            # Windows line endings: cmd.exe and Notepad users get these files directly.
+            text = (ROOT / "installer" / name).read_text(encoding="ascii")
+            text = text.replace("\r\n", "\n").replace("\n", "\r\n")
+            z.writestr(f"{top}/{name}", text.encode("ascii"))
         with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as t:
             for member in t.getmembers():
                 if not member.isfile():

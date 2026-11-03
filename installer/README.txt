@@ -8,7 +8,7 @@ You need
 --------
 - Windows 10 or 11 (64-bit) and a DirectX 12 graphics card.
 - Your Wet Xbox 360 disc image as an .iso file (for example, a dump of your own disc).
-- About 25 GB of free disk space and an internet connection.
+- About 15 GB of free disk space (plus about 8 GB for build tools if they are not installed yet) and an internet connection.
 
 How to install
 --------------

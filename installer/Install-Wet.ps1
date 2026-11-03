@@ -199,7 +199,7 @@ if ($llvm) { $env:LLVM_BIN = $llvm }
 # ---- 3. Extract the disc --------------------------------------------------------------------
 Step "3/5  Extracting game files"
 if (-not $haveGame) {
-    Run "Extracting the disc image (about 7 GB)" $python.Exe ($python.Args + @((Join-Path $Source "tools\xdvdfs_extract.py"), "extract", $IsoPath, $GameDir))
+    Run "Extracting the disc image (about 4 GB)" $python.Exe ($python.Args + @((Join-Path $Source "tools\xdvdfs_extract.py"), "extract", $IsoPath, $GameDir))
 }
 $xex = Get-Item (Join-Path $GameDir "default.xex") -ErrorAction SilentlyContinue
 if (-not $xex) { Fail "default.xex was not found in the disc image. Is this a Wet (Xbox 360) disc?" }

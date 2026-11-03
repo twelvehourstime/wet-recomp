@@ -28,6 +28,21 @@ Known issues:
 - The first area transition in a level can hitch for a few frames while textures stream in.
 - 3x render scale is untested.
 
+## Installing (easy way)
+
+1. Download `wet-recomp-<version>.zip` from the
+   [Releases](https://github.com/twelvehourstime/wet-recomp/releases) page. It contains the
+   installer and the source, no game files.
+2. Extract it to a short path such as `C:\Games\Wet` and double-click `Install-Wet.bat`.
+3. Pick your Wet `.iso`. The installer lists any missing build tools and asks before
+   installing them with winget, then extracts your disc, recompiles and builds the game,
+   and puts a **Wet** shortcut on your desktop.
+
+The first install takes roughly 20-45 minutes, most of it tool downloads and the build.
+Everything happens on your machine; `install.log` records each step.
+
+The rest of this README is for building by hand.
+
 ## Requirements
 
 - Windows 10 or 11, x64, with a Direct3D 12 GPU.
@@ -37,7 +52,7 @@ Known issues:
   looks in `C:\Program Files\LLVM\bin`; set `LLVM_BIN` if it is installed elsewhere.
 - Visual Studio 2022 or its Build Tools with the "Desktop development with C++" workload
   (Clang uses its Windows SDK and runtime libraries).
-- About 10 GB of free disk space.
+- About 15 GB of free disk space (game files, SDK and build).
 
 ## Building
 

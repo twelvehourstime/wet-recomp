@@ -87,10 +87,18 @@ def build_game(args):
     sdk_install = SDK_DIR / "out" / "install" / SDK_PRESET
     if not sdk_install.exists():
         sys.exit("build.py: SDK not installed; run `python scripts/build.py sdk` first")
-    run(["cmake", "--preset", preset,
-         f"-DCMAKE_C_COMPILER={LLVM_BIN / 'clang.exe'}",
-         f"-DCMAKE_CXX_COMPILER={LLVM_BIN / 'clang++.exe'}",
-         f"-DCMAKE_PREFIX_PATH={sdk_install}"], cwd=ROOT)
+    configure = ["cmake", "--preset", preset,
+                 f"-DCMAKE_C_COMPILER={LLVM_BIN / 'clang.exe'}",
+                 f"-DCMAKE_CXX_COMPILER={LLVM_BIN / 'clang++.exe'}",
+                 f"-DCMAKE_PREFIX_PATH={sdk_install}"]
+    # generated/rexglue.cmake reads the generated source list at configure time, but codegen
+    # only runs during the build. On a clean tree, run codegen first and configure again so
+    # the recompiled sources are part of the build (otherwise wet.exe fails to link).
+    fresh = not (ROOT / "generated" / "default" / "sources.cmake").exists()
+    run(configure, cwd=ROOT)
+    if fresh:
+        run(["cmake", "--build", str(build_dir), "--target", "wet_codegen"], cwd=ROOT)
+        run(configure, cwd=ROOT)
     cmd = ["cmake", "--build", str(build_dir), "--parallel"]
     if args.jobs:
         cmd.append(str(args.jobs))
